@@ -26,6 +26,7 @@
   h1 { font-size: 28px; margin: 0 0 4px; }
   .sub { color: var(--muted); margin: 0 0 24px; }
   label { display: block; color: var(--muted); font-size: 14px; margin: 12px 0 6px; }
+  textarea.field { font: 12px/1.35 ui-monospace, Menlo, monospace; resize: vertical; }
   .field { width: 100%; min-width: 0; padding: 12px; border-radius: 10px; border: 1px solid #2c2f36; background: var(--panel); color: var(--text); }
   .row { display: flex; gap: 8px; margin-top: 12px; }
   .row > button, .row > .field { flex: 1; }
@@ -79,8 +80,12 @@
   <details id="turnBox">
     <summary>Ретранслятор (TURN) для мобильного интернета и строгих сетей</summary>
     <p class="hint">Достаточно настроить только на камере: зрители получат настройки от неё по зашифрованному каналу.
-      Бесплатный ключ: зарегистрируйтесь на <a href="https://www.metered.ca/tools/openrelay/" target="_blank" rel="noopener">metered.ca</a>,
-      создайте приложение и скопируйте его адрес и API-ключ (раздел TURN Server → Credentials). Бесплатно 20 ГБ в месяц.</p>
+      В <a href="https://dashboard.metered.ca" target="_blank" rel="noopener">кабинете Metered</a>: TURN Server → Credentials →
+      Create Credential, затем в строке ключа «Get credential» → «Show ICE Servers Array» (или кнопка ICE) и скопируйте массив целиком.</p>
+    <label for="tJson">ICE Servers Array из Metered (вставьте как есть)</label>
+    <textarea id="tJson" class="field" rows="4" autocomplete="off" autocapitalize="off" spellcheck="false"
+      placeholder='[{ urls: "turn:global.relay.metered.ca:80", username: "…", credential: "…" }, …]'></textarea>
+    <p class="hint">Или вместо массива: адрес приложения и API-ключ учётных данных (не путать с ключами sk_id/sk_secret).</p>
     <label for="mHost">Metered: адрес приложения</label>
     <input id="mHost" class="field" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="myapp.metered.live">
     <label for="mKey">Metered: API-ключ</label>
@@ -91,7 +96,7 @@
       <input id="tUser" class="field" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="логин">
       <input id="tPass" class="field" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="пароль">
     </div>
-    <label class="check"><input type="checkbox" id="openRelay" checked> Резервный общий Open Relay (без регистрации, может быть перегружен)</label>
+    <label class="check"><input type="checkbox" id="openRelay"> Резервный общий Open Relay (без регистрации, часто не отвечает)</label>
     <div class="row"><button id="turnTest">Проверить ретрансляторы</button></div>
     <pre id="turnOut" class="hidden"></pre>
   </details>
@@ -133,7 +138,7 @@
 <script>
 'use strict';
 
-const VERSION = 'v7 · 2026-11-23';
+const VERSION = 'v8 · 2026-11-23';
 
 /* ================= НАСТРОЙКИ ================= */
 // Сигнализация: публичные MQTT-брокеры (WebSocket). Используются все сразу, хватит любого одного.
@@ -225,6 +230,7 @@ const TURN_KEY = 'secam-turn';
 function loadTurn() { try { return JSON.parse(lsGet(TURN_KEY) || '{}') || {}; } catch { return {}; } }
 function saveTurn() {
   lsSet(TURN_KEY, JSON.stringify({
+    json: $('tJson').value.trim(),
     mHost: $('mHost').value.trim(), mKey: $('mKey').value.trim(),
     url: $('tUrl').value.trim(), user: $('tUser').value.trim(), pass: $('tPass').value,
     openRelay: $('openRelay').checked,
@@ -252,6 +258,25 @@ function mergeIce(...lists) {
   const seen = new Set(), out = [];
   for (const s of lists.flat()) { const k = JSON.stringify(s); if (!seen.has(k)) { seen.add(k); out.push(s); } }
   return out;
+}
+
+// Разбор массива ICE-серверов, скопированного из кабинета Metered. Там он показан как код JavaScript
+// (ключи без кавычек, висячие запятые), поэтому при неудаче JSON.parse разбираем объекты регулярками.
+function parseIceText(text) {
+  if (!text) return [];
+  try {
+    const j = JSON.parse(text);
+    return sanitizeIce(Array.isArray(j) ? j : j && j.iceServers);
+  } catch {}
+  const out = [];
+  for (const block of text.match(/\{[^{}]*\}/g) || []) {
+    const str = (k) => { const m = new RegExp(`["']?${k}["']?\\s*:\\s*["']([^"']*)["']`).exec(block); return m ? m[1] : undefined; };
+    let urls = str('urls');
+    const arr = /["']?urls["']?\s*:\s*\[([^\]]*)\]/.exec(block);
+    if (arr) urls = Array.from(arr[1].matchAll(/["']([^"']+)["']/g), (x) => x[1]);
+    out.push({ urls, username: str('username'), credential: str('credential') });
+  }
+  return sanitizeIce(out);
 }
 
 async function openRelayServer() {
@@ -297,11 +322,15 @@ async function getIceServers() {
       else notes.push(`Metered: ошибка ${e.message}`);
     }
   }
+  if (s.json) {
+    const arr = parseIceText(s.json);
+    if (arr.length) { list.push(...arr); notes.push(`массив Metered ${arr.length}`); } else notes.push('массив ICE не распознан');
+  }
   if (s.url) {
     const own = sanitizeIce([{ urls: s.url, username: s.user, credential: s.pass }]);
     if (own.length) { list.push(...own); notes.push('свой TURN'); } else notes.push('свой TURN: неверный адрес или нет логина/пароля');
   }
-  if (s.openRelay !== false) {
+  if (s.openRelay === true) {
     try { list.push(await openRelayServer()); notes.push('Open Relay'); } catch (e) { notes.push('Open Relay: ' + e.message); }
   }
   log(`[ice] серверы: STUN ${ICE_SERVERS.length}; ${notes.join(', ') || 'TURN не задан'}`);
@@ -1102,8 +1131,9 @@ els.room.value = lsGet('secam-room') || '';
   const s = loadTurn();
   $('mHost').value = s.mHost || ''; $('mKey').value = s.mKey || '';
   $('tUrl').value = s.url || ''; $('tUser').value = s.user || ''; $('tPass').value = s.pass || '';
-  $('openRelay').checked = s.openRelay !== false;
-  for (const id of ['mHost', 'mKey', 'tUrl', 'tUser', 'tPass', 'openRelay']) $(id).addEventListener('change', saveTurn);
+  $('openRelay').checked = s.openRelay === true;
+  $('tJson').value = s.json || '';
+  for (const id of ['tJson', 'mHost', 'mKey', 'tUrl', 'tUser', 'tPass', 'openRelay']) $(id).addEventListener('change', saveTurn);
   $('turnTest').onclick = () => testTurn().catch((e) => { $('turnOut').textContent = 'Ошибка: ' + e.message; });
 }
 
