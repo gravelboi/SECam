@@ -102,7 +102,7 @@
 <script>
 'use strict';
 
-const VERSION = 'v3 · 2026-11-23';
+const VERSION = 'v4 · 2026-11-23';
 
 /* ================= НАСТРОЙКИ ================= */
 // Сигнализация: публичные MQTT-брокеры (WebSocket). Используются все сразу, хватит любого одного.
@@ -178,15 +178,35 @@ function showStage(mode) {
   document.querySelectorAll('.view-only').forEach((b) => b.classList.toggle('hidden', mode !== 'viewer'));
 }
 
-// Ждём, пока соберутся ICE-кандидаты, чтобы отправить SDP одним сообщением.
-function waitIce(pc, ms = 3000) {
-  if (pc.iceGatheringState === 'complete') return Promise.resolve();
-  return new Promise((resolve) => {
-    const done = () => { clearTimeout(t); pc.removeEventListener('icegatheringstatechange', check); resolve(); };
-    const check = () => { if (pc.iceGatheringState === 'complete') done(); };
-    const t = setTimeout(done, ms);
-    pc.addEventListener('icegatheringstatechange', check);
+// Trickle ICE: каждый найденный адрес отправляем сразу, а не ждём окончания сбора.
+// Входящие кандидаты копим, пока не установлено удалённое описание (сообщения от разных
+// брокеров могут прийти в любом порядке).
+function candType(c) { const m = / typ (\w+)/.exec(c || ''); return m ? m[1] : '?'; }
+function countStr(o) { return Object.entries(o).map(([k, v]) => `${k}:${v}`).join(' ') || 'нет'; }
+function trickle(pc, sendCand, tag) {
+  const mine = {}, theirs = {}, queue = [];
+  pc.addEventListener('icecandidate', (e) => {
+    if (!e.candidate || !e.candidate.candidate) {
+      log(`[${tag}] свои адреса собраны: ${countStr(mine)}`);
+      return;
+    }
+    const t = candType(e.candidate.candidate);
+    mine[t] = (mine[t] || 0) + 1;
+    const c = e.candidate;
+    sendCand({ candidate: c.candidate, sdpMid: c.sdpMid, sdpMLineIndex: c.sdpMLineIndex });
   });
+  const apply = async (c) => {
+    try { await pc.addIceCandidate(c); } catch (e) { log(`[${tag}] addIceCandidate: ${e.message}`); }
+  };
+  return {
+    async add(c) {
+      const t = candType(c.candidate);
+      theirs[t] = (theirs[t] || 0) + 1;
+      if (!pc.remoteDescription) queue.push(c); else await apply(c);
+    },
+    async flush() { while (queue.length) await apply(queue.shift()); },
+    summary() { return `свои ${countStr(mine)}; чужие ${countStr(theirs)}`; },
+  };
 }
 
 function candidateSummary(sdp) {
@@ -306,7 +326,7 @@ class Signal {
     const payload = concat(iv, ct);
     const sent = this.conns.filter((c) => c.ready).length;
     this.conns.forEach((c) => c.publish(payload));
-    if (obj.t !== 'hello' || !this.helloLogged) log(`[sig] → ${obj.t}${obj.to ? ' для ' + obj.to : ''} через ${sent} брокер(а), ${payload.length} байт`);
+    if (obj.t !== 'ice' && (obj.t !== 'hello' || !this.helloLogged)) log(`[sig] → ${obj.t}${obj.to ? ' для ' + obj.to : ''} через ${sent} брокер(а), ${payload.length} байт`);
     if (obj.t === 'hello') this.helloLogged = true;
   }
   async recv(payload) {
@@ -330,7 +350,7 @@ class Signal {
     }
     if (msg.to && msg.to !== this.id) return;
     const key = msg.t + msg.from + (msg.sid || '');
-    if (msg.t !== 'hello' || this.lastHello !== key) log(`[sig] ← ${msg.t} от ${msg.from} (задержка ${skew} мс)`);
+    if (msg.t !== 'ice' && (msg.t !== 'hello' || this.lastHello !== key)) log(`[sig] ← ${msg.t} от ${msg.from} (задержка ${skew} мс)`);
     if (msg.t === 'hello') this.lastHello = key;
     this.onMsg(msg);
   }
@@ -437,6 +457,7 @@ async function startCamera(room) {
     log(`[cam] готовлю offer для ${vid}`);
     const pc = new RTCPeerConnection(RTC_CONFIG);
     const v = { pc, sid, connected: false, timer: null };
+    v.tr = trickle(pc, (c) => { if (viewers.get(vid) === v) signal.send({ t: 'ice', to: vid, sid, c }); }, 'cam');
     viewers.set(vid, v);
     stream.getTracks().forEach((t) => pc.addTrack(t, stream));
     pc.addEventListener('iceconnectionstatechange', () => {
@@ -444,14 +465,14 @@ async function startCamera(room) {
       log(`[cam] ${vid} ice=${st}`);
       clearTimeout(v.timer);
       if (st === 'connected' || st === 'completed') { v.connected = true; updateStatus(); }
-      else if (st === 'failed' || st === 'closed') dropViewer(vid, st);
+      else if (st === 'failed') dropViewer(vid, 'failed, адреса: ' + v.tr.summary());
+      else if (st === 'closed') dropViewer(vid, st);
       else if (st === 'disconnected') v.timer = setTimeout(() => dropViewer(vid, 'нет связи 10 с'), 10000);
     });
     // Если за 30 с соединение не установилось — освобождаем место.
     v.timer = setTimeout(() => { if (!v.connected) dropViewer(vid, 'не подключился за 30 с'); }, 30000);
 
     await pc.setLocalDescription(await pc.createOffer());
-    await waitIce(pc);
     if (viewers.get(vid) !== v) return;
     log(`[cam] offer → ${vid} (${candidateSummary(pc.localDescription.sdp)})`);
     await signal.send({ t: 'offer', to: vid, sid, sdp: pc.localDescription.sdp });
@@ -466,7 +487,11 @@ async function startCamera(room) {
         if (!v || v.sid !== m.sid || v.pc.signalingState !== 'have-local-offer') return;
         log(`[cam] answer ← ${m.from} (${candidateSummary(m.sdp)})`);
         await v.pc.setRemoteDescription({ type: 'answer', sdp: m.sdp });
+        await v.tr.flush();
         limitBitrate(v.pc);
+      } else if (m.t === 'ice') {
+        const v = viewers.get(m.from);
+        if (v && v.sid === m.sid) await v.tr.add(m.c);
       } else if (m.t === 'bye') {
         dropViewer(m.from, 'зритель вышел');
       }
@@ -504,7 +529,7 @@ async function startViewer(room) {
   showStage('viewer');
   setStatus('Подключаюсь к сигнальным серверам…', 'warn');
 
-  let pc = null, sid = null, camId = null, helloTimer = null, watchdog = null, hellos = 0;
+  let pc = null, tr = null, early = [], sid = null, camId = null, helloTimer = null, watchdog = null, hellos = 0;
   const signal = await Signal.create(room, onMsg);
   let wasReady = 0;
   signal.onReadyChange = () => {
@@ -526,7 +551,7 @@ async function startViewer(room) {
     if (reason) log('[view] сброс: ' + reason);
     clearTimeout(watchdog);
     if (pc) { try { pc.close(); } catch {} }
-    pc = null; camId = null; hellos = 0;
+    pc = null; tr = null; early = []; camId = null; hellos = 0;
     sid = randId(8);
     clearInterval(helloTimer);
     helloTimer = setInterval(sayHello, HELLO_EVERY_MS);
@@ -534,13 +559,21 @@ async function startViewer(room) {
   }
 
   async function onMsg(m) {
-    if (m.t !== 'offer' || m.sid !== sid || pc) return;
+    if (m.sid !== sid) return;
+    if (m.t === 'ice') {
+      if (tr && m.from === camId) await tr.add(m.c);
+      else if (!pc) early.push(m);   // кандидат обогнал offer
+      return;
+    }
+    if (m.t !== 'offer' || pc) return;
     try {
       clearInterval(helloTimer);
       camId = m.from;
       log(`[view] offer ← ${camId} (${candidateSummary(m.sdp)})`);
       setStatus('Соединяюсь с камерой…', 'warn');
       const mine = pc = new RTCPeerConnection(RTC_CONFIG);
+      tr = trickle(pc, (c) => { if (pc === mine) signal.send({ t: 'ice', to: camId, sid, c }); }, 'view');
+      for (const e of early.splice(0)) if (e.from === camId) await tr.add(e.c);
       pc.addEventListener('track', (e) => {
         els.video.srcObject = e.streams[0] || new MediaStream([e.track]);
         els.video.play().catch(() => {});
@@ -555,7 +588,7 @@ async function startViewer(room) {
           setStatus('Смотрю', 'ok');
         } else if (st === 'failed') {
           els.turnHint.classList.remove('hidden');
-          reset('ice failed');
+          reset('ice failed, адреса: ' + tr.summary());
         } else if (st === 'disconnected') {
           setStatus('Связь с камерой прервалась…', 'warn');
           clearTimeout(watchdog);
@@ -565,15 +598,15 @@ async function startViewer(room) {
         }
       });
       await pc.setRemoteDescription({ type: 'offer', sdp: m.sdp });
+      await tr.flush();
       await pc.setLocalDescription(await pc.createAnswer());
-      await waitIce(pc);
       if (pc !== mine) return;
       log(`[view] answer → ${camId} (${candidateSummary(pc.localDescription.sdp)})`);
       await signal.send({ t: 'answer', to: camId, sid, sdp: pc.localDescription.sdp });
       watchdog = setTimeout(() => {
         if (pc !== mine) return;
         const st = mine.iceConnectionState;
-        if (st !== 'connected' && st !== 'completed') { els.turnHint.classList.remove('hidden'); reset('не соединилось за 20 с'); }
+        if (st !== 'connected' && st !== 'completed') { els.turnHint.classList.remove('hidden'); reset(`не соединилось за 20 с (ice=${st}), адреса: ${tr.summary()}`); }
       }, 20000);
     } catch (e) {
       log('[view] ошибка: ' + e.message);
