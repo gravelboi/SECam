@@ -50,6 +50,7 @@
   #log { position: absolute; left: 12px; right: 12px; top: calc(52px + env(safe-area-inset-top)); max-height: 45%; overflow: auto;
     margin: 0; padding: 10px; border-radius: 10px; background: rgba(0,0,0,.8); color: #cfd2da; font: 11px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
   #status { cursor: pointer; }
+  #tapPlay { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 5; padding: 16px 24px; font-size: 17px; }
   #dimmer { position: fixed; inset: 0; background: #000; z-index: 10; display: flex; align-items: flex-end; justify-content: center;
     color: #222; font-size: 12px; padding-bottom: 24px; }
 </style>
@@ -79,6 +80,7 @@
     <button id="logBtn">Журнал</button>
   </div>
   <pre id="log" class="hidden"></pre>
+  <button id="tapPlay" class="primary hidden">Нажмите, чтобы запустить видео</button>
   <div id="turnHint" class="hidden">
     Не удаётся установить прямое соединение (вероятно, оба устройства за симметричным NAT, например на мобильном интернете).
     Нужен TURN-сервер: впишите его данные в массив <code>ICE_SERVERS</code> в начале скрипта.
@@ -102,7 +104,7 @@
 <script>
 'use strict';
 
-const VERSION = 'v5 · 2026-11-23';
+const VERSION = 'v6 · 2026-11-23';
 
 /* ================= НАСТРОЙКИ ================= */
 // Сигнализация: публичные MQTT-брокеры (WebSocket). Используются все сразу, хватит любого одного.
@@ -434,9 +436,41 @@ async function startCamera(room) {
     const s = signal.readyCount();
     const live = Array.from(viewers.values()).filter((v) => v.connected).length;
     if (!s && !live) return setStatus(`Нет связи с сигнальными серверами (0/${BROKERS.length}), повторяю…`, 'err');
-    setStatus(`В эфире · зрителей: ${live} · сигнал ${s}/${BROKERS.length}`, s ? 'ok' : 'warn');
+    setStatus(`В эфире · зрителей: ${live} · сигнал ${s}/${BROKERS.length}` + (camInfo ? ' · ' + camInfo : ''), s ? 'ok' : 'warn');
   }
   signal.onReadyChange = updateStatus;
+
+  // Раз в 3 с: состояние камеры и сколько реально кодируется/отправляется каждому зрителю.
+  let camInfo = '', camTick = 0, mutedSince = 0;
+  setInterval(async () => {
+    camTick++;
+    const t = stream && stream.getVideoTracks()[0];
+    const trackInfo = t ? `${t.readyState}${t.muted ? ' muted' : ''}${t.enabled ? '' : ' disabled'}` : 'нет трека';
+    if (t && t.readyState === 'ended' && document.visibilityState === 'visible') {
+      log('[cam] видеодорожка завершена, перезапускаю камеру');
+      await restartCapture();
+    } else if (t && t.muted) {
+      if (!mutedSince) { mutedSince = Date.now(); log('[cam] iOS приостановил камеру (track muted)'); }
+      else if (Date.now() - mutedSince > 6000) { mutedSince = 0; log('[cam] камера молчит 6 с, перезапускаю'); restartCapture(); }
+    } else mutedSince = 0;
+    const parts = [];
+    for (const [vid, v] of viewers) {
+      if (!v.connected) continue;
+      const st = await rtpStats(v.pc, 'outbound-rtp').catch(() => null);
+      if (!st) { parts.push('нет статистики'); continue; }
+      const now = { t: Date.now(), bytes: st.bytesSent || 0, frames: st.framesEncoded || 0 };
+      if (v.last) {
+        const dt = (now.t - v.last.t) / 1000;
+        const fps = Math.round((now.frames - v.last.frames) / dt);
+        const kbps = Math.round((now.bytes - v.last.bytes) * 8 / dt / 1000);
+        parts.push(`${fps} к/с ${kbps} кбит/с`);
+        if (fps === 0 || camTick % 5 === 0) log(`[cam] → ${vid}: ${fps} к/с, ${kbps} кбит/с, трек ${trackInfo}`);
+      }
+      v.last = now;
+    }
+    camInfo = parts.join(', ');
+    updateStatus();
+  }, 3000);
 
   function dropViewer(vid, why) {
     const v = viewers.get(vid);
@@ -469,7 +503,7 @@ async function startCamera(room) {
       const st = pc.iceConnectionState;
       log(`[cam] ${vid} ice=${st}`);
       clearTimeout(v.timer);
-      if (st === 'connected' || st === 'completed') { v.connected = true; updateStatus(); }
+      if (st === 'connected' || st === 'completed') { v.connected = true; v.last = null; updateStatus(); }
       else if (st === 'failed') dropViewer(vid, 'failed, адреса: ' + v.tr.summary());
       else if (st === 'closed') dropViewer(vid, st);
       else if (st === 'disconnected') v.timer = setTimeout(() => dropViewer(vid, 'нет связи 10 с'), 10000);
@@ -507,6 +541,14 @@ async function startCamera(room) {
   $('exitBtn').onclick = () => { signal.stop(); location.hash = ''; location.reload(); };
 }
 
+// Статистика RTP (Safari 15 использует mediaType вместо kind).
+async function rtpStats(pc, type) {
+  const r = await pc.getStats();
+  let out = null;
+  r.forEach((x) => { if (x.type === type && (x.kind === 'video' || x.mediaType === 'video')) out = x; });
+  return out;
+}
+
 async function limitBitrate(pc) {
   for (const s of pc.getSenders()) {
     if (!s.track || s.track.kind !== 'video' || !s.getParameters) continue;
@@ -535,6 +577,36 @@ async function startViewer(room) {
   setStatus('Подключаюсь к сигнальным серверам…', 'warn');
 
   let pc = null, tr = null, early = [], sid = null, camId = null, helloTimer = null, watchdog = null, hellos = 0;
+  let statTimer = null;
+  const tapPlay = $('tapPlay');
+  tapPlay.onclick = () => { tapPlay.classList.add('hidden'); els.video.play().catch((e) => log('[view] play: ' + e.message)); };
+
+  // Раз в 2 с проверяем, что кадры действительно приходят и показываются.
+  function startStats(mine) {
+    clearInterval(statTimer);
+    let last = null, stallSince = Date.now(), tick = 0;
+    statTimer = setInterval(async () => {
+      if (pc !== mine) { clearInterval(statTimer); return; }
+      const st = await rtpStats(mine, 'inbound-rtp').catch(() => null);
+      const v = els.video, now = Date.now();
+      const bytes = st ? st.bytesReceived || 0 : 0, frames = st ? st.framesDecoded || 0 : 0;
+      if (last) {
+        const dt = (now - last.t) / 1000;
+        const fps = Math.round((frames - last.frames) / dt);
+        const kbps = Math.round((bytes - last.bytes) * 8 / dt / 1000);
+        if (bytes > last.bytes) stallSince = now;
+        const info = `${fps} к/с · ${kbps} кбит/с · ${v.videoWidth}×${v.videoHeight}`;
+        const stalled = now - stallSince;
+        if (stalled > 4000) setStatus(`Соединено, но видео от камеры не идёт (${Math.round(stalled / 1000)} с)`, 'warn');
+        else if (fps === 0 && kbps > 0) setStatus(`Данные идут (${kbps} кбит/с), но кадры не декодируются`, 'warn');
+        else setStatus('Смотрю · ' + info, 'ok');
+        if (fps === 0 || ++tick % 5 === 0) log(`[view] поток: ${info}, decoded=${frames}, paused=${v.paused}, readyState=${v.readyState}`);
+        if (v.paused && frames > 0) v.play().catch(() => tapPlay.classList.remove('hidden'));
+        if (stalled > 15000) { reset('нет видеоданных 15 с'); return; }
+      }
+      last = { t: now, bytes, frames };
+    }, 2000);
+  }
   const signal = await Signal.create(room, onMsg);
   let wasReady = 0;
   signal.onReadyChange = () => {
@@ -555,6 +627,8 @@ async function startViewer(room) {
   function reset(reason) {
     if (reason) log('[view] сброс: ' + reason);
     clearTimeout(watchdog);
+    clearInterval(statTimer);
+    tapPlay.classList.add('hidden');
     if (pc) { try { pc.close(); } catch {} }
     pc = null; tr = null; early = []; camId = null; hellos = 0;
     sid = randId(8);
@@ -580,8 +654,11 @@ async function startViewer(room) {
       tr = trickle(pc, (c) => { if (pc === mine) signal.send({ t: 'ice', to: camId, sid, c }); }, 'view');
       for (const e of early.splice(0)) if (e.from === camId) await tr.add(e.c);
       pc.addEventListener('track', (e) => {
+        log(`[view] получен трек ${e.track.kind}, muted=${e.track.muted}, state=${e.track.readyState}`);
+        e.track.addEventListener('unmute', () => log('[view] трек: пошли данные (unmute)'));
+        e.track.addEventListener('mute', () => log('[view] трек: данные прекратились (mute)'));
         els.video.srcObject = e.streams[0] || new MediaStream([e.track]);
-        els.video.play().catch(() => {});
+        els.video.play().catch((err) => { log('[view] autoplay не сработал: ' + err.message); tapPlay.classList.remove('hidden'); });
       });
       pc.addEventListener('iceconnectionstatechange', () => {
         if (pc !== mine) return;
@@ -590,7 +667,7 @@ async function startViewer(room) {
         if (st === 'connected' || st === 'completed') {
           clearTimeout(watchdog);
           els.turnHint.classList.add('hidden');
-          setStatus('Смотрю', 'ok');
+          if (!mine.statsStarted) { mine.statsStarted = true; setStatus('Соединено, жду видео…', 'warn'); startStats(mine); }
         } else if (st === 'failed') {
           els.turnHint.classList.remove('hidden');
           reset('ice failed, адреса: ' + tr.summary());
