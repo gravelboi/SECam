@@ -25,11 +25,18 @@
   #start { max-width: 420px; margin: 0 auto; padding: 32px 16px; }
   h1 { font-size: 28px; margin: 0 0 4px; }
   .sub { color: var(--muted); margin: 0 0 24px; }
-  label { display: block; color: var(--muted); font-size: 14px; margin-bottom: 6px; }
-  #room { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #2c2f36; background: var(--panel); color: var(--text); }
+  label { display: block; color: var(--muted); font-size: 14px; margin: 12px 0 6px; }
+  .field { width: 100%; min-width: 0; padding: 12px; border-radius: 10px; border: 1px solid #2c2f36; background: var(--panel); color: var(--text); }
   .row { display: flex; gap: 8px; margin-top: 12px; }
-  .row > button { flex: 1; }
+  .row > button, .row > .field { flex: 1; }
   .hint { color: var(--muted); font-size: 13px; margin-top: 16px; }
+  details { margin-top: 20px; background: #15171b; border-radius: 10px; padding: 12px; }
+  summary { cursor: pointer; font-size: 15px; }
+  details .hint { margin-top: 8px; }
+  details a { color: var(--accent); }
+  label.check { display: flex; gap: 8px; align-items: center; color: var(--text); }
+  #turnOut { margin: 12px 0 0; padding: 10px; border-radius: 8px; background: #000; color: #cfd2da;
+    font: 11px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
 
   /* Stage (camera / viewer) */
   #stage { position: fixed; inset: 0; background: #000; }
@@ -40,7 +47,7 @@
   .bar.bottom { bottom: 0; padding-bottom: calc(10px + env(safe-area-inset-bottom));
     background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,.7)); }
   .bar button { background: rgba(40,42,48,.85); padding: 10px 14px; }
-  #status { flex: 1; min-width: 0; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  #status { flex: 1; min-width: 0; font-size: 14px; display: flex; align-items: center; gap: 8px; cursor: pointer; }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
   .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.err { background: var(--err); }
   #shareBox { width: 100%; font-size: 13px; color: var(--muted); word-break: break-all; }
@@ -49,7 +56,6 @@
     background: rgba(26,28,33,.95); border-radius: 12px; padding: 16px; font-size: 14px; }
   #log { position: absolute; left: 12px; right: 12px; top: calc(52px + env(safe-area-inset-top)); max-height: 45%; overflow: auto;
     margin: 0; padding: 10px; border-radius: 10px; background: rgba(0,0,0,.8); color: #cfd2da; font: 11px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
-  #status { cursor: pointer; }
   #tapPlay { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 5; padding: 16px 24px; font-size: 17px; }
   #dimmer { position: fixed; inset: 0; background: #000; z-index: 10; display: flex; align-items: flex-end; justify-content: center;
     color: #222; font-size: 12px; padding-bottom: 24px; }
@@ -59,9 +65,9 @@
 
 <section id="start">
   <h1>SECam</h1>
-  <p class="sub">Камера наблюдения из старого айфона. Видео идёт напрямую между устройствами.</p>
+  <p class="sub">Камера наблюдения из старого айфона. Видео идёт напрямую между устройствами, а если это невозможно — через ретранслятор.</p>
   <label for="room">Код комнаты (длинный и случайный: его знание = доступ к видео)</label>
-  <input id="room" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="например, garage-7f3k9q2m">
+  <input id="room" class="field" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="например, garage-7f3k9q2m">
   <div class="row">
     <button id="genBtn">Сгенерировать</button>
   </div>
@@ -69,8 +75,30 @@
     <button id="camBtn" class="primary">Это камера</button>
     <button id="viewBtn">Смотреть</button>
   </div>
+
+  <details id="turnBox">
+    <summary>Ретранслятор (TURN) для мобильного интернета и строгих сетей</summary>
+    <p class="hint">Достаточно настроить только на камере: зрители получат настройки от неё по зашифрованному каналу.
+      Бесплатный ключ: зарегистрируйтесь на <a href="https://www.metered.ca/tools/openrelay/" target="_blank" rel="noopener">metered.ca</a>,
+      создайте приложение и скопируйте его адрес и API-ключ (раздел TURN Server → Credentials). Бесплатно 20 ГБ в месяц.</p>
+    <label for="mHost">Metered: адрес приложения</label>
+    <input id="mHost" class="field" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="myapp.metered.live">
+    <label for="mKey">Metered: API-ключ</label>
+    <input id="mKey" class="field" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <label for="tUrl">Свой TURN-сервер (необязательно)</label>
+    <input id="tUrl" class="field" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="turns:turn.example.com:443?transport=tcp">
+    <div class="row">
+      <input id="tUser" class="field" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="логин">
+      <input id="tPass" class="field" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="пароль">
+    </div>
+    <label class="check"><input type="checkbox" id="openRelay" checked> Резервный общий Open Relay (без регистрации, может быть перегружен)</label>
+    <div class="row"><button id="turnTest">Проверить ретрансляторы</button></div>
+    <pre id="turnOut" class="hidden"></pre>
+  </details>
+
   <p class="hint" id="version"></p>
-  <p class="hint">На камере: «Автоблокировка → Никогда», зарядка, Safari не сворачивать. Для защиты от случайного выхода включите Гид-доступ.</p>
+  <p class="hint">На камере: «Автоблокировка → Никогда», зарядка, Safari не сворачивать. Для защиты от случайного выхода включите Гид-доступ.
+    Если iOS перезагрузит страницу, камера запустится снова сама.</p>
 </section>
 
 <section id="stage" class="hidden">
@@ -82,8 +110,9 @@
   <pre id="log" class="hidden"></pre>
   <button id="tapPlay" class="primary hidden">Нажмите, чтобы запустить видео</button>
   <div id="turnHint" class="hidden">
-    Не удаётся установить прямое соединение (вероятно, оба устройства за симметричным NAT, например на мобильном интернете).
-    Нужен TURN-сервер: впишите его данные в массив <code>ICE_SERVERS</code> в начале скрипта.
+    Не удаётся соединиться с камерой ни напрямую, ни через ретранслятор.
+    Откройте на камере стартовый экран → «Ретранслятор (TURN)», впишите ключ Metered и нажмите «Проверить ретрансляторы».
+    Попытки продолжаются автоматически.
     <div class="row"><button id="hideHint">Понятно</button></div>
   </div>
   <div class="bar bottom">
@@ -104,7 +133,7 @@
 <script>
 'use strict';
 
-const VERSION = 'v6 · 2026-11-23';
+const VERSION = 'v7 · 2026-11-23';
 
 /* ================= НАСТРОЙКИ ================= */
 // Сигнализация: публичные MQTT-брокеры (WebSocket). Используются все сразу, хватит любого одного.
@@ -113,17 +142,19 @@ const BROKERS = [
   'wss://test.mosquitto.org:8081/mqtt',
   'wss://broker.emqx.io:8084/mqtt',
 ];
-// STUN, доступные без VPN (проверено diag.html). Если прямое соединение не устанавливается, добавьте TURN:
-// { urls: 'turn:YOUR_TURN_HOST:443?transport=tcp', username: '...', credential: '...' }
+// STUN, доступные без VPN (проверено diag.html).
 const ICE_SERVERS = [
   { urls: 'stun:stun.cloudflare.com:3478' },
   { urls: 'stun:stun.sipnet.ru:3478' },
 ];
-const RTC_CONFIG = { iceServers: ICE_SERVERS };
+// Резервный общий TURN Metered Open Relay. Учётные данные выводятся из общего секрета (TURN REST API),
+// регистрация не нужна. Он бесплатный и общий, поэтому для надёжности лучше свой ключ Metered (см. стартовый экран).
+const OPENRELAY = { host: 'staticauth.openrelay.metered.ca', secret: 'openrelayprojectsecret' };
 const MAX_VIEWERS = 3;          // iPhone SE больше не потянет кодировать
 const MAX_BITRATE = 1500000;    // бит/с на зрителя
 const HELLO_EVERY_MS = 3000;
 const MSG_MAX_AGE_MS = 120000;  // защита от повторной отправки старых сообщений
+const LOST_GIVE_UP_MS = 45000;  // сколько пытаться восстановить оборванное соединение, прежде чем начать заново
 
 /* ================= УТИЛИТЫ ================= */
 const $ = (id) => document.getElementById(id);
@@ -139,15 +170,22 @@ const logLines = [];
 function log(msg) {
   const t = new Date().toTimeString().slice(0, 8);
   logLines.push(t + ' ' + msg);
-  if (logLines.length > 300) logLines.shift();
+  if (logLines.length > 400) logLines.shift();
   const el = $('log');
+  if (el.classList.contains('hidden')) return; // не перерисовываем скрытый журнал (экономия на старом айфоне)
   el.textContent = logLines.join('\n');
   el.scrollTop = el.scrollHeight;
 }
-function toggleLog() { $('log').classList.toggle('hidden'); }
+function toggleLog() {
+  const el = $('log');
+  el.classList.toggle('hidden');
+  if (!el.classList.contains('hidden')) { el.textContent = logLines.join('\n'); el.scrollTop = el.scrollHeight; }
+}
+window.addEventListener('error', (e) => log('[js] ' + e.message));
+window.addEventListener('unhandledrejection', (e) => log('[js] ' + (e.reason && e.reason.message || e.reason)));
 
 function setStatus(text, level) {
-  if (els.statusText.textContent !== text) log('[статус] ' + text);
+  if (els.statusText.textContent !== text && !/^(Смотрю|В эфире)/.test(text)) log('[статус] ' + text);
   els.statusText.textContent = text;
   els.dot.className = 'dot' + (level ? ' ' + level : '');
 }
@@ -165,6 +203,8 @@ function concat(...parts) {
   for (const p of parts) { out.set(p, o); o += p.length; }
   return out;
 }
+function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function lsSet(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch {} }
 
 function viewUrl(room) {
   const u = new URL(location.href);
@@ -180,13 +220,150 @@ function showStage(mode) {
   document.querySelectorAll('.view-only').forEach((b) => b.classList.toggle('hidden', mode !== 'viewer'));
 }
 
-// Trickle ICE: каждый найденный адрес отправляем сразу, а не ждём окончания сбора.
-// Входящие кандидаты копим, пока не установлено удалённое описание (сообщения от разных
-// брокеров могут прийти в любом порядке).
+/* ================= ICE / TURN ================= */
+const TURN_KEY = 'secam-turn';
+function loadTurn() { try { return JSON.parse(lsGet(TURN_KEY) || '{}') || {}; } catch { return {}; } }
+function saveTurn() {
+  lsSet(TURN_KEY, JSON.stringify({
+    mHost: $('mHost').value.trim(), mKey: $('mKey').value.trim(),
+    url: $('tUrl').value.trim(), user: $('tUser').value.trim(), pass: $('tPass').value,
+    openRelay: $('openRelay').checked,
+  }));
+}
+
+// Оставляем только корректные записи: одна битая запись роняет конструктор RTCPeerConnection целиком.
+function sanitizeIce(arr) {
+  if (!Array.isArray(arr)) return [];
+  const out = [];
+  for (const s of arr) {
+    if (!s || typeof s !== 'object') continue;
+    const urls = (Array.isArray(s.urls) ? s.urls : [s.urls || s.url])
+      .filter((u) => typeof u === 'string' && /^(stun|turns?):[^\s]+$/i.test(u));
+    if (!urls.length) continue;
+    const o = { urls };
+    if (typeof s.username === 'string') o.username = s.username;
+    if (typeof s.credential === 'string') o.credential = s.credential;
+    if (urls.some((u) => /^turns?:/i.test(u)) && (!o.username || !o.credential)) continue;
+    out.push(o);
+  }
+  return out.slice(0, 12);
+}
+function mergeIce(...lists) {
+  const seen = new Set(), out = [];
+  for (const s of lists.flat()) { const k = JSON.stringify(s); if (!seen.has(k)) { seen.add(k); out.push(s); } }
+  return out;
+}
+
+async function openRelayServer() {
+  const username = `${Math.floor(Date.now() / 1000) + 24 * 3600}:secam`;
+  const key = await crypto.subtle.importKey('raw', enc.encode(OPENRELAY.secret), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(username)));
+  const credential = btoa(String.fromCharCode(...sig));
+  const h = OPENRELAY.host;
+  return { urls: [`turn:${h}:80`, `turn:${h}:80?transport=tcp`, `turn:${h}:443`, `turns:${h}:443?transport=tcp`], username, credential };
+}
+
+async function meteredServers(host, apiKey) {
+  host = host.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+  if (!host.includes('.')) host += '.metered.live';
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 8000);
+  try {
+    const r = await fetch(`https://${host}/api/v1/turn/credentials?apiKey=${encodeURIComponent(apiKey)}`, { signal: ctl.signal, cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const list = sanitizeIce(await r.json());
+    if (!list.length) throw new Error('пустой ответ');
+    return list;
+  } catch (e) {
+    throw new Error(e.name === 'AbortError' ? 'таймаут' : e.message);
+  } finally { clearTimeout(t); }
+}
+
+// Собирает список ICE-серверов из настроек. Ответ Metered кэшируется: если сервис временно
+// недоступен, используются последние полученные учётные данные.
+async function getIceServers() {
+  const s = loadTurn();
+  const list = [...ICE_SERVERS], notes = [];
+  if (s.mHost && s.mKey) {
+    const ck = 'secam-metered-cache', id = s.mHost + '|' + s.mKey;
+    try {
+      const m = await meteredServers(s.mHost, s.mKey);
+      list.push(...m); notes.push(`Metered ${m.length}`);
+      lsSet(ck, JSON.stringify({ id, list: m }));
+    } catch (e) {
+      let c = null;
+      try { c = JSON.parse(lsGet(ck) || 'null'); } catch {}
+      if (c && c.id === id) { list.push(...sanitizeIce(c.list)); notes.push(`Metered из кэша (${e.message})`); }
+      else notes.push(`Metered: ошибка ${e.message}`);
+    }
+  }
+  if (s.url) {
+    const own = sanitizeIce([{ urls: s.url, username: s.user, credential: s.pass }]);
+    if (own.length) { list.push(...own); notes.push('свой TURN'); } else notes.push('свой TURN: неверный адрес или нет логина/пароля');
+  }
+  if (s.openRelay !== false) {
+    try { list.push(await openRelayServer()); notes.push('Open Relay'); } catch (e) { notes.push('Open Relay: ' + e.message); }
+  }
+  log(`[ice] серверы: STUN ${ICE_SERVERS.length}; ${notes.join(', ') || 'TURN не задан'}`);
+  return list;
+}
+
+function newPc(iceServers) {
+  // Отладка: localStorage['secam-force-relay']='1' заставляет идти только через TURN.
+  const relay = lsGet('secam-force-relay') === '1';
+  if (relay) log('[ice] принудительно только через TURN');
+  try { return new RTCPeerConnection({ iceServers, iceTransportPolicy: relay ? 'relay' : 'all' }); }
+  catch (e) {
+    log('[ice] конфигурация отклонена браузером (' + e.message + '), использую только STUN');
+    return new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  }
+}
+
+// Проверка: каждый TURN-адрес по отдельности должен выдать relay-кандидата.
+function probeRelay(server) {
+  return new Promise((resolve) => {
+    const t0 = performance.now();
+    let pc, done = false;
+    try { pc = new RTCPeerConnection({ iceServers: [server], iceTransportPolicy: 'relay' }); }
+    catch (e) { resolve('✗ ' + e.message); return; }
+    const fin = (r) => { if (done) return; done = true; clearTimeout(tm); try { pc.close(); } catch {} resolve(r); };
+    const tm = setTimeout(() => fin('✗ нет ответа за 10 с'), 10000);
+    pc.onicecandidate = (e) => {
+      if (e.candidate && / typ relay /.test(e.candidate.candidate)) fin('✓ работает, ' + Math.round(performance.now() - t0) + ' мс');
+      else if (!e.candidate) fin('✗ адрес не выдан (неверный ключ или порт заблокирован)');
+    };
+    pc.createDataChannel('t');
+    pc.createOffer().then((o) => pc.setLocalDescription(o)).catch((e) => fin('✗ ' + e.message));
+  });
+}
+async function testTurn() {
+  saveTurn();
+  const out = $('turnOut');
+  out.classList.remove('hidden');
+  out.textContent = 'Получаю учётные данные…';
+  const list = await getIceServers();
+  const items = [];
+  for (const s of list) for (const u of s.urls) if (/^turns?:/i.test(u)) items.push({ u, server: { urls: u, username: s.username, credential: s.credential } });
+  if (!items.length) { out.textContent = 'Ретрансляторы не заданы.\n' + logLines.slice(-1).join(''); return; }
+  const res = items.map(() => '…');
+  const render = () => {
+    const ok = res.filter((r) => r.startsWith('✓')).length;
+    out.textContent = items.map((x, i) => `${x.u}\n  ${res[i]}`).join('\n') +
+      `\n\n${logLines[logLines.length - 1] || ''}` +
+      (res.includes('…') ? '' : `\nИтого работает ${ok} из ${items.length}.` + (ok ? '' : ' Без TURN камера будет доступна только при прямом соединении.'));
+  };
+  render();
+  await Promise.all(items.map(async (x, i) => { res[i] = await probeRelay(x.server); render(); }));
+}
+
+// Trickle ICE с поколениями: каждое новое offer (в том числе ICE restart) получает номер gen.
+// Кандидаты помечаются номером и применяются только к своему поколению: сообщения от разных
+// брокеров приходят в любом порядке, и кандидат нового поколения может обогнать offer/answer.
 function candType(c) { const m = / typ (\w+)/.exec(c || ''); return m ? m[1] : '?'; }
 function countStr(o) { return Object.entries(o).map(([k, v]) => `${k}:${v}`).join(' ') || 'нет'; }
 function trickle(pc, sendCand, tag) {
-  const mine = {}, theirs = {}, queue = [];
+  const mine = {}, theirs = {};
+  let queue = [], gen = -1;
   pc.addEventListener('icecandidate', (e) => {
     if (!e.candidate || !e.candidate.candidate) {
       log(`[${tag}] свои адреса собраны: ${countStr(mine)}`);
@@ -201,12 +378,18 @@ function trickle(pc, sendCand, tag) {
     try { await pc.addIceCandidate(c); } catch (e) { log(`[${tag}] addIceCandidate: ${e.message}`); }
   };
   return {
-    async add(c) {
+    async add(c, g) {
       const t = candType(c.candidate);
       theirs[t] = (theirs[t] || 0) + 1;
-      if (!pc.remoteDescription) queue.push(c); else await apply(c);
+      if (g > gen) queue.push({ c, g });
+      else if (g === gen) await apply(c);
     },
-    async flush() { while (queue.length) await apply(queue.shift()); },
+    // Удалённое описание поколения g установлено: применяем накопленные кандидаты этого поколения.
+    async ready(g) {
+      gen = g;
+      const q = queue; queue = [];
+      for (const x of q) { if (x.g === g) await apply(x.c); else if (x.g > g) queue.push(x); }
+    },
     summary() { return `свои ${countStr(mine)}; чужие ${countStr(theirs)}`; },
   };
 }
@@ -215,6 +398,30 @@ function candidateSummary(sdp) {
   const types = {};
   for (const m of sdp.matchAll(/ typ (\w+)/g)) types[m[1]] = (types[m[1]] || 0) + 1;
   return Object.entries(types).map(([k, v]) => `${k}:${v}`).join(' ') || 'нет кандидатов';
+}
+
+// Статистика RTP (Safari 15 использует mediaType вместо kind).
+function pickRtp(report, type) {
+  let out = null;
+  report.forEach((x) => { if (x.type === type && (x.kind === 'video' || x.mediaType === 'video')) out = x; });
+  return out;
+}
+// Каким путём сейчас идёт видео: напрямую или через TURN.
+function routeOf(report) {
+  let pair = null;
+  report.forEach((x) => { if (x.type === 'transport' && x.selectedCandidatePairId) pair = report.get(x.selectedCandidatePairId) || pair; });
+  if (!pair) report.forEach((x) => {
+    if (x.type === 'candidate-pair' && x.state === 'succeeded' && (x.nominated || x.selected)) {
+      if (!pair || (x.bytesReceived + x.bytesSent) > (pair.bytesReceived + pair.bytesSent)) pair = x;
+    }
+  });
+  if (!pair) return '';
+  const l = report.get(pair.localCandidateId), r = report.get(pair.remoteCandidateId);
+  const lt = l && l.candidateType, rt = r && r.candidateType;
+  const rtt = pair.currentRoundTripTime ? ` ${Math.round(pair.currentRoundTripTime * 1000)} мс` : '';
+  if (lt === 'relay' || rt === 'relay') return 'через TURN' + rtt;
+  if (lt === 'host' && rt === 'host') return 'локальная сеть' + rtt;
+  return 'напрямую' + rtt;
 }
 
 /* ================= MQTT 3.1.1 поверх WebSocket (минимум: QoS 0) ================= */
@@ -231,35 +438,58 @@ class MqttConn {
     this.url = url; this.topic = topic; this.onMessage = onMessage; this.onState = onState;
     this.host = new URL(url).hostname;
     this.ready = false; this.fails = 0; this.stopped = false;
+    this.ws = null; this.retryTimer = null;
     this.connect();
   }
   connect() {
-    if (this.stopped) return;
+    if (this.stopped || this.ws) return;
+    clearTimeout(this.retryTimer); this.retryTimer = null;
     this.buf = new Uint8Array(0);
     let ws;
     try { ws = new WebSocket(this.url, 'mqtt'); } catch (e) { log(`[mqtt] ${this.host}: ${e.message}`); return this.retry(); }
     this.ws = ws;
+    this.lastRx = Date.now();
     ws.binaryType = 'arraybuffer';
-    const timeout = setTimeout(() => { if (!this.ready) { log(`[mqtt] ${this.host}: таймаут`); try { ws.close(); } catch {} } }, 10000);
+    this.connTimer = setTimeout(() => { if (this.ws === ws && !this.ready) this.drop('таймаут подключения'); }, 10000);
     ws.onopen = () => {
-      const flags = 0x02; // clean session
+      const flags = 0x02; // clean session, keepalive 30 с
       ws.send(mqttPacket(0x10, concat(mqttStr('MQTT'), Uint8Array.of(4, flags, 0, 30), mqttStr('secam' + randId(16)))));
     };
-    ws.onmessage = (e) => this.feed(new Uint8Array(e.data));
+    ws.onmessage = (e) => { this.lastRx = Date.now(); this.feed(new Uint8Array(e.data)); };
     ws.onerror = () => {};
-    ws.onclose = (e) => {
-      clearTimeout(timeout);
-      clearInterval(this.pinger);
-      if (this.ready) log(`[mqtt] ${this.host}: отключён (code ${e.code})`);
-      this.ready = false;
-      this.onState();
-      this.retry();
-    };
+    ws.onclose = (e) => this.closed(ws, 'code ' + e.code);
+  }
+  closed(ws, why) {
+    if (ws !== this.ws) return; // уже обработано
+    this.ws = null;
+    clearTimeout(this.connTimer);
+    clearInterval(this.pinger);
+    if (this.ready) log(`[mqtt] ${this.host}: отключён (${why})`);
+    this.ready = false;
+    this.onState();
+    this.retry();
+  }
+  // Принудительный разрыв, не дожидаясь onclose: на iOS после смены сети он может прийти через минуты.
+  drop(why) {
+    const ws = this.ws;
+    if (!ws) return;
+    ws.onclose = ws.onmessage = ws.onopen = null;
+    try { ws.close(); } catch {}
+    this.closed(ws, why);
   }
   retry() {
+    if (this.stopped || this.retryTimer) return;
+    const delay = Math.min(15000, 1000 * 2 ** Math.min(this.fails++, 4));
+    this.retryTimer = setTimeout(() => { this.retryTimer = null; this.connect(); }, delay);
+  }
+  // Сеть изменилась или страница вернулась на экран: переподключаемся сразу и проверяем живость.
+  kick() {
     if (this.stopped) return;
-    const delay = Math.min(30000, 2000 * 2 ** Math.min(this.fails++, 4));
-    setTimeout(() => this.connect(), delay);
+    if (!this.ws) { this.fails = 0; this.connect(); return; }
+    if (!this.ready) return;
+    const ws = this.ws, t = Date.now();
+    try { ws.send(Uint8Array.of(0xC0, 0)); } catch {}
+    setTimeout(() => { if (this.ws === ws && this.lastRx < t) this.drop('не отвечает после смены сети'); }, 5000);
   }
   feed(chunk) {
     this.buf = this.buf.length ? concat(this.buf, chunk) : chunk;
@@ -280,10 +510,15 @@ class MqttConn {
   }
   handle(type, flags, body) {
     if (type === 2) { // CONNACK
-      if (body[1] !== 0) { log(`[mqtt] ${this.host}: отказ, код ${body[1]}`); this.ws.close(); return; }
+      if (body[1] !== 0) { log(`[mqtt] ${this.host}: отказ, код ${body[1]}`); this.drop('отказ'); return; }
+      clearTimeout(this.connTimer);
       this.ws.send(mqttPacket(0x82, concat(Uint8Array.of(0, 1), mqttStr(this.topic), Uint8Array.of(0))));
       this.ready = true; this.fails = 0;
-      this.pinger = setInterval(() => { try { this.ws.send(Uint8Array.of(0xC0, 0)); } catch {} }, 20000);
+      // PINGREQ каждые 10 с; если от брокера ничего нет 35 с, соединение мёртвое (а onclose может не прийти).
+      this.pinger = setInterval(() => {
+        if (Date.now() - this.lastRx > 35000) { this.drop('брокер не отвечает'); return; }
+        try { this.ws.send(Uint8Array.of(0xC0, 0)); } catch {}
+      }, 10000);
       log(`[mqtt] ${this.host}: подключён`);
       this.onState();
     } else if (type === 3) { // PUBLISH
@@ -297,7 +532,7 @@ class MqttConn {
     if (!this.ready) return;
     try { this.ws.send(mqttPacket(0x30, concat(mqttStr(this.topic), payload))); } catch {}
   }
-  stop() { this.stopped = true; try { this.ws.close(); } catch {} }
+  stop() { this.stopped = true; clearTimeout(this.retryTimer); this.drop('стоп'); }
 }
 
 /* ================= Зашифрованный сигнальный канал ================= */
@@ -321,14 +556,15 @@ class Signal {
     this.conns = BROKERS.map((u) => new MqttConn(u, topic, (p) => this.recv(p), () => this.onReadyChange()));
   }
   readyCount() { return this.conns.filter((c) => c.ready).length; }
+  kick() { this.conns.forEach((c) => c.kick()); }
   async send(obj) {
     const msg = { ...obj, from: this.id, ts: Date.now(), mid: randId(8) };
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, this.key, enc.encode(JSON.stringify(msg))));
     const payload = concat(iv, ct);
-    const sent = this.conns.filter((c) => c.ready).length;
+    const sent = this.readyCount();
     this.conns.forEach((c) => c.publish(payload));
-    if (obj.t !== 'ice' && (obj.t !== 'hello' || !this.helloLogged)) log(`[sig] → ${obj.t}${obj.to ? ' для ' + obj.to : ''} через ${sent} брокер(а), ${payload.length} байт`);
+    if (obj.t !== 'ice' && (obj.t !== 'hello' || !this.helloLogged)) log(`[sig] → ${obj.t}${obj.gen ? ' #' + obj.gen : ''}${obj.to ? ' для ' + obj.to : ''} через ${sent} брокер(а), ${payload.length} байт`);
     if (obj.t === 'hello') this.helloLogged = true;
   }
   async recv(payload) {
@@ -352,9 +588,9 @@ class Signal {
     }
     if (msg.to && msg.to !== this.id) return;
     const key = msg.t + msg.from + (msg.sid || '');
-    if (msg.t !== 'ice' && (msg.t !== 'hello' || this.lastHello !== key)) log(`[sig] ← ${msg.t} от ${msg.from} (задержка ${skew} мс)`);
+    if (msg.t !== 'ice' && (msg.t !== 'hello' || this.lastHello !== key)) log(`[sig] ← ${msg.t}${msg.gen ? ' #' + msg.gen : ''} от ${msg.from} (задержка ${skew} мс)`);
     if (msg.t === 'hello') this.lastHello = key;
-    this.onMsg(msg);
+    try { await this.onMsg(msg); } catch (e) { log(`[sig] ошибка обработки ${msg.t}: ${e.message}`); }
   }
   stop() { this.conns.forEach((c) => c.stop()); }
 }
@@ -366,7 +602,8 @@ async function startCamera(room) {
 
   let facing = 'environment';
   let stream = null;
-  const viewers = new Map(); // viewerId -> { pc, sid, timer }
+  // viewerId -> { pc, sid, gen, tr, connected, everConnected, lostAt, lastOffer, restarts, route, last }
+  const viewers = new Map();
 
   async function getStream() {
     return navigator.mediaDevices.getUserMedia({
@@ -388,9 +625,13 @@ async function startCamera(room) {
     if (old && old !== stream) old.getTracks().forEach((t) => t.stop());
   }
 
+  let restarting = false;
   async function restartCapture() {
+    if (restarting) return;
+    restarting = true;
     try { await replaceStream(await getStream()); log('[cam] захват перезапущен'); }
     catch (e) { setStatus('Камера недоступна: ' + e.message, 'err'); }
+    finally { restarting = false; }
   }
 
   function onTrackEnded() {
@@ -398,18 +639,15 @@ async function startCamera(room) {
     if (document.visibilityState === 'visible') restartCapture();
   }
 
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'visible') return;
-    const t = stream && stream.getVideoTracks()[0];
-    if (!t || t.readyState === 'ended') restartCapture();
-    requestWakeLock();
-  });
-
-  try {
-    await replaceStream(await getStream());
-  } catch (e) {
-    setStatus('Нет доступа к камере: ' + e.message, 'err');
-    return;
+  let attempts = 0;
+  for (;;) {
+    try { await replaceStream(await getStream()); break; }
+    catch (e) {
+      // NotAllowedError — пользователь запретил доступ; остальные ошибки (камера занята) бывают временными.
+      if (e.name === 'NotAllowedError' || ++attempts > 5) { setStatus('Нет доступа к камере: ' + e.message, 'err'); return; }
+      setStatus(`Камера занята, повторяю (${attempts})…`, 'warn');
+      await new Promise((r) => setTimeout(r, 2000));
+    }
   }
 
   const link = viewUrl(room);
@@ -429,19 +667,40 @@ async function startCamera(room) {
   els.dimmer.onclick = () => els.dimmer.classList.add('hidden');
   requestWakeLock();
 
+  setStatus('Получаю настройки ретранслятора…', 'warn');
+  let iceList = await getIceServers();
+  // Учётные данные TURN временные: обновляем каждые 4 часа (камера работает сутками).
+  setInterval(async () => { iceList = await getIceServers(); }, 4 * 3600 * 1000);
+
   setStatus('Подключаюсь к сигнальным серверам…', 'warn');
   const signal = await Signal.create(room, onMsg);
 
+  let camInfo = '';
   function updateStatus() {
     const s = signal.readyCount();
     const live = Array.from(viewers.values()).filter((v) => v.connected).length;
+    const lost = Array.from(viewers.values()).filter((v) => v.everConnected && !v.connected).length;
     if (!s && !live) return setStatus(`Нет связи с сигнальными серверами (0/${BROKERS.length}), повторяю…`, 'err');
-    setStatus(`В эфире · зрителей: ${live} · сигнал ${s}/${BROKERS.length}` + (camInfo ? ' · ' + camInfo : ''), s ? 'ok' : 'warn');
+    setStatus(`В эфире · зрителей: ${live}${lost ? ` (+${lost} восстанавливается)` : ''} · сигнал ${s}/${BROKERS.length}` + (camInfo ? ' · ' + camInfo : ''), s ? 'ok' : 'warn');
   }
   signal.onReadyChange = updateStatus;
 
-  // Раз в 3 с: состояние камеры и сколько реально кодируется/отправляется каждому зрителю.
-  let camInfo = '', camTick = 0, mutedSince = 0;
+  const onNetChange = (why) => {
+    log(`[cam] ${why}: проверяю связь`);
+    signal.kick();
+    for (const [vid, v] of viewers) if (!v.connected && v.everConnected) restartIce(vid, why, true);
+  };
+  window.addEventListener('online', () => onNetChange('сеть появилась'));
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    const t = stream && stream.getVideoTracks()[0];
+    if (!t || t.readyState === 'ended') restartCapture();
+    requestWakeLock();
+    onNetChange('страница снова на экране');
+  });
+
+  // Раз в 3 с: состояние камеры, статистика по зрителям, повтор потерянных сообщений, уборка.
+  let camTick = 0, mutedSince = 0;
   setInterval(async () => {
     camTick++;
     const t = stream && stream.getVideoTracks()[0];
@@ -453,20 +712,35 @@ async function startCamera(room) {
       if (!mutedSince) { mutedSince = Date.now(); log('[cam] iOS приостановил камеру (track muted)'); }
       else if (Date.now() - mutedSince > 6000) { mutedSince = 0; log('[cam] камера молчит 6 с, перезапускаю'); restartCapture(); }
     } else mutedSince = 0;
+
+    const now = Date.now();
     const parts = [];
-    for (const [vid, v] of viewers) {
-      if (!v.connected) continue;
-      const st = await rtpStats(v.pc, 'outbound-rtp').catch(() => null);
-      if (!st) { parts.push('нет статистики'); continue; }
-      const now = { t: Date.now(), bytes: st.bytesSent || 0, frames: st.framesEncoded || 0 };
-      if (v.last) {
-        const dt = (now.t - v.last.t) / 1000;
-        const fps = Math.round((now.frames - v.last.frames) / dt);
-        const kbps = Math.round((now.bytes - v.last.bytes) * 8 / dt / 1000);
-        parts.push(`${fps} к/с ${kbps} кбит/с`);
-        if (fps === 0 || camTick % 5 === 0) log(`[cam] → ${vid}: ${fps} к/с, ${kbps} кбит/с, трек ${trackInfo}`);
+    for (const [vid, v] of Array.from(viewers)) {
+      if (!v.connected) {
+        const lost = now - v.lostAt;
+        if (!v.everConnected) {
+          if (lost > 30000) { dropViewer(vid, 'не подключился за 30 с, адреса: ' + v.tr.summary()); continue; }
+          // answer мог потеряться: повторяем тот же offer (в нём уже есть собранные адреса)
+          if (v.pc.signalingState === 'have-local-offer' && now - v.lastSent > 5000) resendOffer(vid, v);
+        } else {
+          if (lost > LOST_GIVE_UP_MS) { dropViewer(vid, `нет связи ${Math.round(lost / 1000)} с`); continue; }
+          if (now - v.lastOffer > 8000) restartIce(vid, 'повтор');
+        }
+        continue;
       }
-      v.last = now;
+      const r = await v.pc.getStats().catch(() => null);
+      if (!r) { parts.push('нет статистики'); continue; }
+      const st = pickRtp(r, 'outbound-rtp');
+      v.route = routeOf(r) || v.route;
+      const cur = { t: now, bytes: st ? st.bytesSent || 0 : 0, frames: st ? st.framesEncoded || 0 : 0 };
+      if (v.last) {
+        const dt = (cur.t - v.last.t) / 1000;
+        const fps = Math.round((cur.frames - v.last.frames) / dt);
+        const kbps = Math.round((cur.bytes - v.last.bytes) * 8 / dt / 1000);
+        parts.push(`${fps} к/с ${kbps} кбит/с ${v.route}`);
+        if (fps === 0 || camTick % 10 === 0) log(`[cam] → ${vid}: ${fps} к/с, ${kbps} кбит/с, ${v.route}, трек ${trackInfo}`);
+      }
+      v.last = cur;
     }
     camInfo = parts.join(', ');
     updateStatus();
@@ -475,16 +749,56 @@ async function startCamera(room) {
   function dropViewer(vid, why) {
     const v = viewers.get(vid);
     if (!v) return;
-    clearTimeout(v.timer);
     try { v.pc.close(); } catch {}
     viewers.delete(vid);
     log(`[cam] зритель ${vid} отключён: ${why}`);
     updateStatus();
   }
 
+  function offerMsg(vid, v) {
+    return { t: 'offer', to: vid, sid: v.sid, gen: v.gen, ice: iceList, sdp: v.pc.localDescription.sdp };
+  }
+  async function resendOffer(vid, v) {
+    v.lastSent = Date.now();
+    log(`[cam] повторяю offer #${v.gen} для ${vid}`);
+    await signal.send(offerMsg(vid, v));
+  }
+
+  async function sendOffer(vid, v, iceRestart) {
+    const pc = v.pc;
+    if (pc.signalingState === 'closed') return;
+    v.lastOffer = v.lastSent = Date.now();
+    if (iceRestart) {
+      // заодно подставляем свежие учётные данные TURN
+      try { const cfg = pc.getConfiguration(); cfg.iceServers = iceList; pc.setConfiguration(cfg); } catch (e) { log('[cam] setConfiguration: ' + e.message); }
+    }
+    const offer = await pc.createOffer(iceRestart ? { iceRestart: true } : {});
+    if (viewers.get(vid) !== v) return;
+    v.gen++;
+    await pc.setLocalDescription(offer);
+    if (viewers.get(vid) !== v) return;
+    log(`[cam] offer #${v.gen}${iceRestart ? ' (ICE restart)' : ''} → ${vid} (${candidateSummary(pc.localDescription.sdp)})`);
+    await signal.send(offerMsg(vid, v));
+  }
+
+  // Восстановление связи без разрыва сессии: новое согласование ICE на том же RTCPeerConnection.
+  function restartIce(vid, why, force) {
+    const v = viewers.get(vid);
+    if (!v) return;
+    if (!force && Date.now() - v.lastOffer < 4000) return;
+    if (v.restarts >= 10) { dropViewer(vid, 'не удалось восстановить связь'); return; }
+    v.restarts++;
+    log(`[cam] ICE restart для ${vid} (${why}, попытка ${v.restarts})`);
+    sendOffer(vid, v, true).catch((e) => log('[cam] ICE restart: ' + e.message));
+  }
+
   async function offerTo(vid, sid) {
     const existing = viewers.get(vid);
-    if (existing && existing.sid === sid) return; // уже обрабатываем эту попытку
+    if (existing && existing.sid === sid) {
+      // Зритель всё ещё шлёт hello — значит, наш offer до него не дошёл.
+      if (!existing.connected && existing.pc.localDescription && Date.now() - existing.lastSent > 2500) await resendOffer(vid, existing);
+      return;
+    }
     if (existing) dropViewer(vid, 'новая попытка');
     if (viewers.size >= MAX_VIEWERS) {
       // Сначала освобождаем места, занятые неудачными попытками (зритель перезагрузил страницу и т.п.).
@@ -494,59 +808,51 @@ async function startCamera(room) {
     if (viewers.size >= MAX_VIEWERS) { log(`[cam] отказ ${vid}: максимум зрителей`); return; }
 
     log(`[cam] готовлю offer для ${vid}`);
-    const pc = new RTCPeerConnection(RTC_CONFIG);
-    const v = { pc, sid, connected: false, timer: null };
-    v.tr = trickle(pc, (c) => { if (viewers.get(vid) === v) signal.send({ t: 'ice', to: vid, sid, c }); }, 'cam');
+    const pc = newPc(iceList);
+    const v = { pc, sid, gen: 0, connected: false, everConnected: false, lostAt: Date.now(), lastOffer: 0, lastSent: 0, restarts: 0, route: '' };
+    v.tr = trickle(pc, (c) => { if (viewers.get(vid) === v) signal.send({ t: 'ice', to: vid, sid, gen: v.gen, c }); }, 'cam');
     viewers.set(vid, v);
     stream.getTracks().forEach((t) => pc.addTrack(t, stream));
     pc.addEventListener('iceconnectionstatechange', () => {
+      if (viewers.get(vid) !== v) return;
       const st = pc.iceConnectionState;
       log(`[cam] ${vid} ice=${st}`);
-      clearTimeout(v.timer);
-      if (st === 'connected' || st === 'completed') { v.connected = true; v.last = null; updateStatus(); }
-      else if (st === 'failed') dropViewer(vid, 'failed, адреса: ' + v.tr.summary());
-      else if (st === 'closed') dropViewer(vid, st);
-      else if (st === 'disconnected') v.timer = setTimeout(() => dropViewer(vid, 'нет связи 10 с'), 10000);
+      if (st === 'connected' || st === 'completed') {
+        if (!v.connected) { v.connected = true; v.everConnected = true; v.lostAt = 0; v.restarts = 0; v.last = null; updateStatus(); }
+      } else if (st === 'disconnected' || st === 'failed') {
+        v.connected = false;
+        if (!v.lostAt) v.lostAt = Date.now();
+        updateStatus();
+        if (!v.everConnected) return; // первое подключение: ждём, таймаут в общем цикле
+        if (st === 'failed') restartIce(vid, 'failed', true);
+        else setTimeout(() => { if (viewers.get(vid) === v && !v.connected) restartIce(vid, 'disconnected'); }, 3000);
+      } else if (st === 'closed') dropViewer(vid, st);
     });
-    // Если за 30 с соединение не установилось — освобождаем место.
-    v.timer = setTimeout(() => { if (!v.connected) dropViewer(vid, 'не подключился за 30 с'); }, 30000);
-
-    await pc.setLocalDescription(await pc.createOffer());
-    if (viewers.get(vid) !== v) return;
-    log(`[cam] offer → ${vid} (${candidateSummary(pc.localDescription.sdp)})`);
-    await signal.send({ t: 'offer', to: vid, sid, sdp: pc.localDescription.sdp });
+    await sendOffer(vid, v, false);
   }
 
   async function onMsg(m) {
-    try {
-      if (m.t === 'hello') {
-        await offerTo(m.from, m.sid);
-      } else if (m.t === 'answer') {
-        const v = viewers.get(m.from);
-        if (!v || v.sid !== m.sid || v.pc.signalingState !== 'have-local-offer') return;
-        log(`[cam] answer ← ${m.from} (${candidateSummary(m.sdp)})`);
-        await v.pc.setRemoteDescription({ type: 'answer', sdp: m.sdp });
-        await v.tr.flush();
-        limitBitrate(v.pc);
-      } else if (m.t === 'ice') {
-        const v = viewers.get(m.from);
-        if (v && v.sid === m.sid) await v.tr.add(m.c);
-      } else if (m.t === 'bye') {
-        dropViewer(m.from, 'зритель вышел');
-      }
-    } catch (e) { log('[cam] ошибка: ' + e.message); }
+    const v = viewers.get(m.from);
+    if (m.t === 'hello') {
+      await offerTo(m.from, m.sid);
+    } else if (m.t === 'answer') {
+      if (!v || v.sid !== m.sid || m.gen !== v.gen || v.pc.signalingState !== 'have-local-offer') return;
+      log(`[cam] answer #${m.gen} ← ${m.from} (${candidateSummary(m.sdp)})`);
+      await v.pc.setRemoteDescription({ type: 'answer', sdp: m.sdp });
+      await v.tr.ready(m.gen);
+      limitBitrate(v.pc);
+    } else if (m.t === 'ice') {
+      if (v && v.sid === m.sid) await v.tr.add(m.c, m.gen);
+    } else if (m.t === 'restart') {
+      if (v && v.sid === m.sid) restartIce(m.from, 'запрос зрителя', !v.connected);
+      else signal.send({ t: 'reset', to: m.from, sid: m.sid }); // камера перезапускалась и не знает этот сеанс
+    } else if (m.t === 'bye') {
+      dropViewer(m.from, 'зритель вышел');
+    }
   }
 
   updateStatus();
-  $('exitBtn').onclick = () => { signal.stop(); location.hash = ''; location.reload(); };
-}
-
-// Статистика RTP (Safari 15 использует mediaType вместо kind).
-async function rtpStats(pc, type) {
-  const r = await pc.getStats();
-  let out = null;
-  r.forEach((x) => { if (x.type === type && (x.kind === 'video' || x.mediaType === 'video')) out = x; });
-  return out;
+  $('exitBtn').onclick = () => { lsSet('secam-mode', null); signal.stop(); location.hash = ''; location.reload(); };
 }
 
 async function limitBitrate(pc) {
@@ -576,37 +882,13 @@ async function startViewer(room) {
   showStage('viewer');
   setStatus('Подключаюсь к сигнальным серверам…', 'warn');
 
-  let pc = null, tr = null, early = [], sid = null, camId = null, helloTimer = null, watchdog = null, hellos = 0;
-  let statTimer = null;
+  let pc = null, tr = null, early = [], sid = null, camId = null, gen = -1, lastAnswer = null;
+  let helloTimer = null, hellos = 0, startedAt = 0, lostAt = 0, everConnected = false, lastRestartReq = 0, lastAnswerResend = 0;
+  let last = null, stallSince = 0, tick = 0, route = '';
   const tapPlay = $('tapPlay');
   tapPlay.onclick = () => { tapPlay.classList.add('hidden'); els.video.play().catch((e) => log('[view] play: ' + e.message)); };
 
-  // Раз в 2 с проверяем, что кадры действительно приходят и показываются.
-  function startStats(mine) {
-    clearInterval(statTimer);
-    let last = null, stallSince = Date.now(), tick = 0;
-    statTimer = setInterval(async () => {
-      if (pc !== mine) { clearInterval(statTimer); return; }
-      const st = await rtpStats(mine, 'inbound-rtp').catch(() => null);
-      const v = els.video, now = Date.now();
-      const bytes = st ? st.bytesReceived || 0 : 0, frames = st ? st.framesDecoded || 0 : 0;
-      if (last) {
-        const dt = (now - last.t) / 1000;
-        const fps = Math.round((frames - last.frames) / dt);
-        const kbps = Math.round((bytes - last.bytes) * 8 / dt / 1000);
-        if (bytes > last.bytes) stallSince = now;
-        const info = `${fps} к/с · ${kbps} кбит/с · ${v.videoWidth}×${v.videoHeight}`;
-        const stalled = now - stallSince;
-        if (stalled > 4000) setStatus(`Соединено, но видео от камеры не идёт (${Math.round(stalled / 1000)} с)`, 'warn');
-        else if (fps === 0 && kbps > 0) setStatus(`Данные идут (${kbps} кбит/с), но кадры не декодируются`, 'warn');
-        else setStatus('Смотрю · ' + info, 'ok');
-        if (fps === 0 || ++tick % 5 === 0) log(`[view] поток: ${info}, decoded=${frames}, paused=${v.paused}, readyState=${v.readyState}`);
-        if (v.paused && frames > 0) v.play().catch(() => tapPlay.classList.remove('hidden'));
-        if (stalled > 15000) { reset('нет видеоданных 15 с'); return; }
-      }
-      last = { t: now, bytes, frames };
-    }, 2000);
-  }
+  const ownIce = await getIceServers();
   const signal = await Signal.create(room, onMsg);
   let wasReady = 0;
   signal.onReadyChange = () => {
@@ -614,6 +896,8 @@ async function startViewer(room) {
     if (!pc && s && !wasReady) sayHello(false); // первый брокер подключился — не ждём таймера
     wasReady = s;
   };
+
+  function isConnected() { return pc && (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed'); }
 
   function sayHello(count = true) {
     if (pc) return;
@@ -624,79 +908,158 @@ async function startViewer(room) {
     signal.send({ t: 'hello', sid });
   }
 
+  function askRestart(why, force) {
+    if (!pc || !camId) return;
+    if (!force && Date.now() - lastRestartReq < 4000) return;
+    lastRestartReq = Date.now();
+    log(`[view] прошу камеру восстановить связь (${why})`);
+    signal.send({ t: 'restart', to: camId, sid });
+  }
+
   function reset(reason) {
     if (reason) log('[view] сброс: ' + reason);
-    clearTimeout(watchdog);
-    clearInterval(statTimer);
     tapPlay.classList.add('hidden');
     if (pc) { try { pc.close(); } catch {} }
-    pc = null; tr = null; early = []; camId = null; hellos = 0;
+    pc = null; tr = null; early = []; camId = null; gen = -1; lastAnswer = null;
+    hellos = 0; lostAt = 0; everConnected = false; last = null; route = '';
     sid = randId(8);
     clearInterval(helloTimer);
     helloTimer = setInterval(sayHello, HELLO_EVERY_MS);
     sayHello();
   }
 
+  const onNetChange = (why) => {
+    log(`[view] ${why}: проверяю связь`);
+    signal.kick();
+    if (pc && !isConnected() && everConnected) askRestart(why, true);
+  };
+  window.addEventListener('online', () => onNetChange('сеть появилась'));
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') onNetChange('страница снова на экране'); });
+
+  // Общий сторож раз в 2 с: таймауты, восстановление связи и проверка, что кадры реально идут.
+  setInterval(async () => {
+    if (!pc) return;
+    const now = Date.now();
+    if (!isConnected()) {
+      if (!everConnected) {
+        if (now - startedAt > 25000) {
+          els.turnHint.classList.remove('hidden');
+          reset(`не соединилось за 25 с (ice=${pc.iceConnectionState}), адреса: ${tr.summary()}`);
+        }
+        return;
+      }
+      const lost = now - (lostAt || now);
+      setStatus(`Связь с камерой прервалась, восстанавливаю… (${Math.round(lost / 1000)} с)`, 'warn');
+      if (lost > LOST_GIVE_UP_MS) { reset(`нет связи ${Math.round(lost / 1000)} с`); return; }
+      askRestart('нет связи');
+      return;
+    }
+    const mine = pc;
+    const r = await mine.getStats().catch(() => null);
+    if (pc !== mine || !r) return;
+    const st = pickRtp(r, 'inbound-rtp');
+    route = routeOf(r) || route;
+    const v = els.video;
+    const bytes = st ? st.bytesReceived || 0 : 0, frames = st ? st.framesDecoded || 0 : 0;
+    if (last) {
+      const dt = (now - last.t) / 1000;
+      const fps = Math.round((frames - last.frames) / dt);
+      const kbps = Math.round((bytes - last.bytes) * 8 / dt / 1000);
+      if (bytes > last.bytes) stallSince = now;
+      const info = `${fps} к/с · ${kbps} кбит/с · ${v.videoWidth}×${v.videoHeight}` + (route ? ' · ' + route : '');
+      const stalled = now - stallSince;
+      if (stalled > 4000) setStatus(`Соединено, но видео от камеры не идёт (${Math.round(stalled / 1000)} с)`, 'warn');
+      else if (fps === 0 && kbps > 0) setStatus(`Данные идут (${kbps} кбит/с), но кадры не декодируются`, 'warn');
+      else setStatus('Смотрю · ' + info, 'ok');
+      if (fps === 0 || ++tick % 15 === 0) log(`[view] поток: ${info}, decoded=${frames}, paused=${v.paused}, readyState=${v.readyState}`);
+      if (v.paused && frames > 0) v.play().catch(() => tapPlay.classList.remove('hidden'));
+      if (stalled > 8000) askRestart('нет видео');
+      if (stalled > 25000) { reset('нет видеоданных 25 с'); return; }
+    }
+    last = { t: now, bytes, frames };
+  }, 2000);
+
   async function onMsg(m) {
     if (m.sid !== sid) return;
+    if (m.t === 'reset') { if (m.from === camId) reset('камера перезапускалась'); return; }
     if (m.t === 'ice') {
-      if (tr && m.from === camId) await tr.add(m.c);
+      if (tr && m.from === camId) await tr.add(m.c, m.gen);
       else if (!pc) early.push(m);   // кандидат обогнал offer
       return;
     }
-    if (m.t !== 'offer' || pc) return;
-    try {
-      clearInterval(helloTimer);
-      camId = m.from;
-      log(`[view] offer ← ${camId} (${candidateSummary(m.sdp)})`);
-      setStatus('Соединяюсь с камерой…', 'warn');
-      const mine = pc = new RTCPeerConnection(RTC_CONFIG);
-      tr = trickle(pc, (c) => { if (pc === mine) signal.send({ t: 'ice', to: camId, sid, c }); }, 'view');
-      for (const e of early.splice(0)) if (e.from === camId) await tr.add(e.c);
-      pc.addEventListener('track', (e) => {
-        log(`[view] получен трек ${e.track.kind}, muted=${e.track.muted}, state=${e.track.readyState}`);
-        e.track.addEventListener('unmute', () => log('[view] трек: пошли данные (unmute)'));
-        e.track.addEventListener('mute', () => log('[view] трек: данные прекратились (mute)'));
-        els.video.srcObject = e.streams[0] || new MediaStream([e.track]);
-        els.video.play().catch((err) => { log('[view] autoplay не сработал: ' + err.message); tapPlay.classList.remove('hidden'); });
-      });
-      pc.addEventListener('iceconnectionstatechange', () => {
-        if (pc !== mine) return;
-        const st = mine.iceConnectionState;
-        log(`[view] ice=${st}`);
-        if (st === 'connected' || st === 'completed') {
-          clearTimeout(watchdog);
-          els.turnHint.classList.add('hidden');
-          if (!mine.statsStarted) { mine.statsStarted = true; setStatus('Соединено, жду видео…', 'warn'); startStats(mine); }
-        } else if (st === 'failed') {
-          els.turnHint.classList.remove('hidden');
-          reset('ice failed, адреса: ' + tr.summary());
-        } else if (st === 'disconnected') {
-          setStatus('Связь с камерой прервалась…', 'warn');
-          clearTimeout(watchdog);
-          watchdog = setTimeout(() => { if (pc === mine && mine.iceConnectionState !== 'connected' && mine.iceConnectionState !== 'completed') reset('нет связи 6 с'); }, 6000);
-        } else if (st === 'closed') {
-          reset('closed');
-        }
-      });
-      await pc.setRemoteDescription({ type: 'offer', sdp: m.sdp });
-      await tr.flush();
-      await pc.setLocalDescription(await pc.createAnswer());
-      if (pc !== mine) return;
-      log(`[view] answer → ${camId} (${candidateSummary(pc.localDescription.sdp)})`);
-      await signal.send({ t: 'answer', to: camId, sid, sdp: pc.localDescription.sdp });
-      watchdog = setTimeout(() => {
-        if (pc !== mine) return;
-        const st = mine.iceConnectionState;
-        if (st !== 'connected' && st !== 'completed') { els.turnHint.classList.remove('hidden'); reset(`не соединилось за 20 с (ice=${st}), адреса: ${tr.summary()}`); }
-      }, 20000);
-    } catch (e) {
-      log('[view] ошибка: ' + e.message);
-      reset('ошибка');
+    if (m.t !== 'offer') return;
+    const g = m.gen || 0;
+    if (pc) {
+      if (m.from !== camId) return;
+      if (g === gen && lastAnswer && Date.now() - lastAnswerResend > 2000) {
+        // камера не получила наш answer и повторяет offer
+        lastAnswerResend = Date.now();
+        log(`[view] повторяю answer #${g}`);
+        await signal.send({ ...lastAnswer, sdp: pc.localDescription.sdp });
+        return;
+      }
+      if (g > gen) await negotiate(m, pc);
+      return;
     }
+    // Новое соединение
+    clearInterval(helloTimer);
+    camId = m.from;
+    startedAt = Date.now();
+    setStatus('Соединяюсь с камерой…', 'warn');
+    const mine = pc = newPc(mergeIce(ownIce, sanitizeIce(m.ice)));
+    tr = trickle(pc, (c) => { if (pc === mine) signal.send({ t: 'ice', to: camId, sid, gen, c }); }, 'view');
+    for (const e of early.splice(0)) if (e.from === camId) await tr.add(e.c, e.gen);
+    pc.addEventListener('track', (e) => {
+      log(`[view] получен трек ${e.track.kind}, muted=${e.track.muted}, state=${e.track.readyState}`);
+      e.track.addEventListener('unmute', () => log('[view] трек: пошли данные (unmute)'));
+      e.track.addEventListener('mute', () => log('[view] трек: данные прекратились (mute)'));
+      els.video.srcObject = e.streams[0] || new MediaStream([e.track]);
+      els.video.play().catch((err) => { log('[view] autoplay не сработал: ' + err.message); tapPlay.classList.remove('hidden'); });
+    });
+    pc.addEventListener('iceconnectionstatechange', () => {
+      if (pc !== mine) return;
+      const st = mine.iceConnectionState;
+      log(`[view] ice=${st}`);
+      if (st === 'connected' || st === 'completed') {
+        els.turnHint.classList.add('hidden');
+        lostAt = 0; stallSince = Date.now(); last = null;
+        if (!everConnected) { everConnected = true; setStatus('Соединено, жду видео…', 'warn'); }
+      } else if (st === 'disconnected' || st === 'failed') {
+        if (!lostAt) lostAt = Date.now();
+        if (everConnected) { setStatus('Связь с камерой прервалась, восстанавливаю…', 'warn'); askRestart(st, st === 'failed'); }
+        else if (st === 'failed') { els.turnHint.classList.remove('hidden'); reset('ice failed, адреса: ' + tr.summary()); }
+      } else if (st === 'closed') {
+        reset('closed');
+      }
+    });
+    await negotiate(m, mine);
+  }
+
+  async function negotiate(m, mine) {
+    if (mine.busy) return; // одно согласование за раз; дубль offer с другого брокера пропускаем
+    mine.busy = true;
+    try {
+      log(`[view] offer #${m.gen}${gen >= 0 ? ' (восстановление связи)' : ''} ← ${camId} (${candidateSummary(m.sdp)})`);
+      if (gen >= 0 && m.ice) {
+        try { const cfg = mine.getConfiguration(); cfg.iceServers = mergeIce(ownIce, sanitizeIce(m.ice)); mine.setConfiguration(cfg); } catch {}
+      }
+      await mine.setRemoteDescription({ type: 'offer', sdp: m.sdp });
+      if (pc !== mine) return;
+      gen = m.gen;
+      await tr.ready(gen);
+      await mine.setLocalDescription(await mine.createAnswer());
+      if (pc !== mine) return;
+      lastAnswer = { t: 'answer', to: camId, sid, gen };
+      log(`[view] answer #${gen} → ${camId} (${candidateSummary(mine.localDescription.sdp)})`);
+      await signal.send({ ...lastAnswer, sdp: mine.localDescription.sdp });
+    } catch (e) {
+      log('[view] ошибка согласования: ' + e.message);
+      if (pc === mine) reset('ошибка');
+    } finally { mine.busy = false; }
   }
 
   reset();
+  window.secamDebug = { askRestart: (why) => askRestart(why || 'отладка', true), pc: () => pc };
 
   $('snapBtn').onclick = () => {
     const v = els.video;
@@ -729,15 +1092,29 @@ $('logBtn').onclick = toggleLog;
 $('status').onclick = toggleLog;
 log(`[init] SECam ${VERSION}`);
 log(`[init] ${navigator.userAgent}`);
-$('version').textContent = 'SECam ' + VERSION;
+$('version').textContent = 'SECam ' + VERSION + ' · ';
+const diagLink = document.createElement('a');
+diagLink.href = 'diag.html'; diagLink.textContent = 'диагностика сети'; diagLink.style.color = 'inherit';
+$('version').appendChild(diagLink);
 
-try { els.room.value = localStorage.getItem('secam-room') || ''; } catch {}
+els.room.value = lsGet('secam-room') || '';
+{
+  const s = loadTurn();
+  $('mHost').value = s.mHost || ''; $('mKey').value = s.mKey || '';
+  $('tUrl').value = s.url || ''; $('tUser').value = s.user || ''; $('tPass').value = s.pass || '';
+  $('openRelay').checked = s.openRelay !== false;
+  for (const id of ['mHost', 'mKey', 'tUrl', 'tUser', 'tPass', 'openRelay']) $(id).addEventListener('change', saveTurn);
+  $('turnTest').onclick = () => testTurn().catch((e) => { $('turnOut').textContent = 'Ошибка: ' + e.message; });
+}
 
 function go(mode) {
   const room = cleanRoom(els.room.value);
   if (room.length < 8) { alert('Код комнаты должен быть не короче 8 символов.'); return; }
   if (!window.isSecureContext || !crypto.subtle) { alert('Нужен HTTPS: без него Safari не даст доступ к камере и шифрованию.'); return; }
-  try { localStorage.setItem('secam-room', room); } catch {}
+  saveTurn();
+  lsSet('secam-room', room);
+  // Камера запоминает режим: если iOS перезагрузит вкладку, трансляция возобновится сама.
+  lsSet('secam-mode', mode === 'camera' ? 'camera' : null);
   (mode === 'camera' ? startCamera(room) : startViewer(room)).catch((e) => setStatus('Ошибка: ' + e.message, 'err'));
 }
 $('camBtn').onclick = () => go('camera');
@@ -746,6 +1123,10 @@ $('viewBtn').onclick = () => go('viewer');
 // Ссылка вида …#view=<код> сразу открывает просмотр.
 const m = location.hash.match(/^#view=(.+)$/);
 if (m) { els.room.value = decodeURIComponent(m[1]); go('viewer'); }
+else if (lsGet('secam-mode') === 'camera' && cleanRoom(els.room.value).length >= 8) {
+  log('[init] автозапуск камеры (страница была перезагружена)');
+  go('camera');
+}
 </script>
 </body>
 </html>
