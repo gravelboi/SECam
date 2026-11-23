@@ -68,6 +68,7 @@
     <button id="camBtn" class="primary">Это камера</button>
     <button id="viewBtn">Смотреть</button>
   </div>
+  <p class="hint" id="version"></p>
   <p class="hint">На камере: «Автоблокировка → Никогда», зарядка, Safari не сворачивать. Для защиты от случайного выхода включите Гид-доступ.</p>
 </section>
 
@@ -100,6 +101,8 @@
 
 <script>
 'use strict';
+
+const VERSION = 'v3 · 2026-11-23';
 
 /* ================= НАСТРОЙКИ ================= */
 // Сигнализация: публичные MQTT-брокеры (WebSocket). Используются все сразу, хватит любого одного.
@@ -285,6 +288,7 @@ class Signal {
     const key = await crypto.subtle.deriveKey(
       { name: 'PBKDF2', salt: enc.encode('secam-v1-salt'), iterations: 100000, hash: 'SHA-256' },
       base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    log(`[sig] отпечаток комнаты: ${topic.slice(-6)} (должен совпадать на камере и у зрителя)`);
     return new Signal(topic, key, onMsg);
   }
   constructor(topic, key, onMsg) {
@@ -300,20 +304,34 @@ class Signal {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, this.key, enc.encode(JSON.stringify(msg))));
     const payload = concat(iv, ct);
+    const sent = this.conns.filter((c) => c.ready).length;
     this.conns.forEach((c) => c.publish(payload));
+    if (obj.t !== 'hello' || !this.helloLogged) log(`[sig] → ${obj.t}${obj.to ? ' для ' + obj.to : ''} через ${sent} брокер(а), ${payload.length} байт`);
+    if (obj.t === 'hello') this.helloLogged = true;
   }
   async recv(payload) {
     let msg;
     try {
       const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: payload.slice(0, 12) }, this.key, payload.slice(12));
       msg = JSON.parse(dec.decode(pt));
-    } catch { return; } // чужое или повреждённое сообщение
+    } catch {
+      this.badCount = (this.badCount || 0) + 1;
+      if (this.badCount <= 3) log(`[sig] не удалось расшифровать сообщение (${payload.length} байт): другой код комнаты?`);
+      return;
+    }
     if (msg.from === this.id) return;           // своё эхо
     if (this.seen.has(msg.mid)) return;         // дубль с другого брокера
     this.seen.add(msg.mid);
     if (this.seen.size > 500) this.seen = new Set(Array.from(this.seen).slice(-250));
-    if (Math.abs(Date.now() - msg.ts) > MSG_MAX_AGE_MS) return;
+    const skew = Date.now() - msg.ts;
+    if (Math.abs(skew) > MSG_MAX_AGE_MS) {
+      log(`[sig] отброшено ${msg.t} от ${msg.from}: часы расходятся на ${Math.round(skew / 1000)} с`);
+      return;
+    }
     if (msg.to && msg.to !== this.id) return;
+    const key = msg.t + msg.from + (msg.sid || '');
+    if (msg.t !== 'hello' || this.lastHello !== key) log(`[sig] ← ${msg.t} от ${msg.from} (задержка ${skew} мс)`);
+    if (msg.t === 'hello') this.lastHello = key;
     this.onMsg(msg);
   }
   stop() { this.conns.forEach((c) => c.stop()); }
@@ -416,6 +434,7 @@ async function startCamera(room) {
     if (existing) dropViewer(vid, 'новая попытка');
     if (viewers.size >= MAX_VIEWERS) { log(`[cam] отказ ${vid}: максимум зрителей`); return; }
 
+    log(`[cam] готовлю offer для ${vid}`);
     const pc = new RTCPeerConnection(RTC_CONFIG);
     const v = { pc, sid, connected: false, timer: null };
     viewers.set(vid, v);
@@ -593,7 +612,9 @@ $('hideHint').onclick = () => els.turnHint.classList.add('hidden');
 $('genBtn').onclick = () => { els.room.value = 'cam-' + randId(12); };
 $('logBtn').onclick = toggleLog;
 $('status').onclick = toggleLog;
+log(`[init] SECam ${VERSION}`);
 log(`[init] ${navigator.userAgent}`);
+$('version').textContent = 'SECam ' + VERSION;
 
 try { els.room.value = localStorage.getItem('secam-room') || ''; } catch {}
 
