@@ -78,10 +78,9 @@
   </div>
 
   <details id="turnBox">
-    <summary>Ретранслятор (TURN) для мобильного интернета и строгих сетей</summary>
-    <p class="hint">Достаточно настроить только на камере: зрители получат настройки от неё по зашифрованному каналу.
-      В <a href="https://dashboard.metered.ca" target="_blank" rel="noopener">кабинете Metered</a>: TURN Server → Credentials →
-      Create Credential, затем в строке ключа «Get credential» → «Show ICE Servers Array» (или кнопка ICE) и скопируйте массив целиком.</p>
+    <summary>Ретранслятор (TURN) — уже вшит, менять не нужно</summary>
+    <p class="hint">Свой Metered уже подставляется сам. Поля ниже только если хотите заменить его другим ключом.
+      Зрители получат настройки от камеры по зашифрованному каналу.</p>
     <label for="tJson">ICE Servers Array из Metered (вставьте как есть)</label>
     <textarea id="tJson" class="field" rows="4" autocomplete="off" autocapitalize="off" spellcheck="false"
       placeholder='[{ urls: "turn:global.relay.metered.ca:80", username: "…", credential: "…" }, …]'></textarea>
@@ -116,8 +115,7 @@
   <button id="tapPlay" class="primary hidden">Нажмите, чтобы запустить видео</button>
   <div id="turnHint" class="hidden">
     Не удаётся соединиться с камерой ни напрямую, ни через ретранслятор.
-    Откройте на камере стартовый экран → «Ретранслятор (TURN)», впишите ключ Metered и нажмите «Проверить ретрансляторы».
-    Попытки продолжаются автоматически.
+    Попытки продолжаются автоматически. Если так и не соединится, на камере откройте «Ретранслятор (TURN)» и нажмите «Проверить ретрансляторы».
     <div class="row"><button id="hideHint">Понятно</button></div>
   </div>
   <div class="bar bottom">
@@ -138,7 +136,7 @@
 <script>
 'use strict';
 
-const VERSION = 'v8 · 2026-11-23';
+const VERSION = 'v9 · 2026-11-23';
 
 /* ================= НАСТРОЙКИ ================= */
 // Сигнализация: публичные MQTT-брокеры (WebSocket). Используются все сразу, хватит любого одного.
@@ -151,6 +149,15 @@ const BROKERS = [
 const ICE_SERVERS = [
   { urls: 'stun:stun.cloudflare.com:3478' },
   { urls: 'stun:stun.sipnet.ru:3478' },
+];
+// Свой TURN Metered. Подставляется сам, стартовый экран для него заполнять не нужно.
+// Учётные данные видны в исходнике страницы: ими может воспользоваться любой, кто откроет сайт.
+const METERED_ICE = [
+  { urls: 'stun:stun.relay.metered.ca:80' },
+  { urls: 'turn:global.relay.metered.ca:80', username: '0506d7353055a13e200838f4', credential: 'ccqkYS+m9GME8J0h' },
+  { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: '0506d7353055a13e200838f4', credential: 'ccqkYS+m9GME8J0h' },
+  { urls: 'turn:global.relay.metered.ca:443', username: '0506d7353055a13e200838f4', credential: 'ccqkYS+m9GME8J0h' },
+  { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: '0506d7353055a13e200838f4', credential: 'ccqkYS+m9GME8J0h' },
 ];
 // Резервный общий TURN Metered Open Relay. Учётные данные выводятся из общего секрета (TURN REST API),
 // регистрация не нужна. Он бесплатный и общий, поэтому для надёжности лучше свой ключ Metered (см. стартовый экран).
@@ -308,7 +315,9 @@ async function meteredServers(host, apiKey) {
 // недоступен, используются последние полученные учётные данные.
 async function getIceServers() {
   const s = loadTurn();
-  const list = [...ICE_SERVERS], notes = [];
+  const builtin = sanitizeIce(METERED_ICE);
+  const list = [...ICE_SERVERS, ...builtin], notes = [];
+  if (builtin.length) notes.push(`Metered ${builtin.length}`);
   if (s.mHost && s.mKey) {
     const ck = 'secam-metered-cache', id = s.mHost + '|' + s.mKey;
     try {
