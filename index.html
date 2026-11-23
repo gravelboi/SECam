@@ -47,6 +47,9 @@
   #shareBox a { color: var(--text); }
   #turnHint { position: absolute; left: 12px; right: 12px; top: 50%; transform: translateY(-50%);
     background: rgba(26,28,33,.95); border-radius: 12px; padding: 16px; font-size: 14px; }
+  #log { position: absolute; left: 12px; right: 12px; top: calc(52px + env(safe-area-inset-top)); max-height: 45%; overflow: auto;
+    margin: 0; padding: 10px; border-radius: 10px; background: rgba(0,0,0,.8); color: #cfd2da; font: 11px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
+  #status { cursor: pointer; }
   #dimmer { position: fixed; inset: 0; background: #000; z-index: 10; display: flex; align-items: flex-end; justify-content: center;
     color: #222; font-size: 12px; padding-bottom: 24px; }
 </style>
@@ -71,8 +74,10 @@
 <section id="stage" class="hidden">
   <video id="video" playsinline autoplay muted></video>
   <div class="bar top">
-    <div id="status"><span class="dot" id="dot"></span><span id="statusText">…</span></div>
+    <div id="status" title="Показать журнал"><span class="dot" id="dot"></span><span id="statusText">…</span></div>
+    <button id="logBtn">Журнал</button>
   </div>
+  <pre id="log" class="hidden"></pre>
   <div id="turnHint" class="hidden">
     Не удаётся установить прямое соединение (вероятно, оба устройства за симметричным NAT, например на мобильном интернете).
     Нужен TURN-сервер: впишите его данные в массив <code>ICE_SERVERS</code> в начале скрипта.
@@ -113,9 +118,55 @@ const els = {
   turnHint: $('turnHint'), dimmer: $('dimmer'),
 };
 
+const logLines = [];
+function log(msg) {
+  const t = new Date().toTimeString().slice(0, 8);
+  logLines.push(t + ' ' + msg);
+  if (logLines.length > 200) logLines.shift();
+  const el = $('log');
+  el.textContent = logLines.join('\n');
+  el.scrollTop = el.scrollHeight;
+}
+function toggleLog() { $('log').classList.toggle('hidden'); }
+
 function setStatus(text, level) {
+  if (els.statusText.textContent !== text) log('[статус] ' + text);
   els.statusText.textContent = text;
   els.dot.className = 'dot' + (level ? ' ' + level : '');
+}
+
+// Подробности о событиях PeerJS для журнала.
+function tracePeer(peer, name) {
+  peer.on('open', (id) => log(`[${name}] signaling open, id=${id.slice(0, 14)}…`));
+  peer.on('disconnected', () => log(`[${name}] signaling disconnected, online=${navigator.onLine}`));
+  peer.on('close', () => log(`[${name}] peer closed`));
+  peer.on('error', (e) => log(`[${name}] error type=${e.type} msg=${e.message}`));
+}
+window.addEventListener('online', () => log('[net] online'));
+window.addEventListener('offline', () => log('[net] offline'));
+log(`[init] ${navigator.userAgent}`);
+
+// Самостоятельная проверка сигнального сервера: HTTP и WebSocket в обход PeerJS.
+async function probeSignaling() {
+  const host = '0.peerjs.com';
+  const t0 = performance.now();
+  try {
+    const r = await fetch(`https://${host}/peerjs/id?ts=${Date.now()}`, { cache: 'no-store' });
+    log(`[probe] HTTP ${r.status} за ${Math.round(performance.now() - t0)} мс`);
+  } catch (e) {
+    log(`[probe] HTTP не удался: ${e.message}`);
+  }
+  await new Promise((resolve) => {
+    const t1 = performance.now();
+    const id = 'secam-probe-' + Math.random().toString(36).slice(2, 10);
+    let ws;
+    try { ws = new WebSocket(`wss://${host}/peerjs?key=peerjs&id=${id}&token=probe&version=1.5.4`); }
+    catch (e) { log(`[probe] WebSocket не создан: ${e.message}`); return resolve(); }
+    const timer = setTimeout(() => { log('[probe] WebSocket: нет ответа 10 с'); try { ws.close(); } catch {} resolve(); }, 10000);
+    ws.onmessage = (m) => { log(`[probe] WebSocket OK за ${Math.round(performance.now() - t1)} мс: ${String(m.data).slice(0, 60)}`); clearTimeout(timer); ws.close(); resolve(); };
+    ws.onerror = () => log('[probe] WebSocket error');
+    ws.onclose = (e) => { log(`[probe] WebSocket closed code=${e.code}`); clearTimeout(timer); resolve(); };
+  });
 }
 
 function cleanRoom(s) { return (s || '').trim().toLowerCase(); }
@@ -234,6 +285,7 @@ async function startCamera(room) {
 
   function connectPeer() {
     peer = new Peer(id, PEER_OPTIONS);
+    tracePeer(peer, 'cam');
     peer.on('open', updateCount);
     peer.on('connection', (conn) => {
       conn.on('open', () => {
@@ -305,6 +357,7 @@ async function startViewer(room) {
   }
 
   peer = new Peer(PEER_OPTIONS);
+  tracePeer(peer, 'view');
   peer.on('open', dial);
   peer.on('call', (call) => {
     call.answer();
@@ -347,6 +400,8 @@ async function startViewer(room) {
 
 /* ================= START ================= */
 $('hideHint').onclick = () => els.turnHint.classList.add('hidden');
+$('logBtn').onclick = toggleLog;
+$('status').onclick = toggleLog;
 $('genBtn').onclick = () => { els.room.value = randomRoom(); };
 
 try { els.room.value = localStorage.getItem('secam-room') || ''; } catch {}
@@ -358,6 +413,7 @@ function go(mode) {
   if (typeof Peer === 'undefined') { alert('Не загрузилась библиотека PeerJS. Проверьте интернет.'); return; }
   if (!window.isSecureContext) { alert('Нужен HTTPS: без него Safari не даст доступ к камере.'); return; }
   mode === 'camera' ? startCamera(room) : startViewer(room);
+  probeSignaling();
 }
 $('camBtn').onclick = () => go('camera');
 $('viewBtn').onclick = () => go('viewer');
