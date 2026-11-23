@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<title>SECam</title>
+<style>
+  :root {
+    --bg: #0e0f12; --panel: #1a1c21; --text: #e9eaee; --muted: #9a9ca5;
+    --accent: #3d8bfd; --ok: #2fbf71; --warn: #f0a83a; --err: #e5534b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  .hidden { display: none !important; }
+  button, input { font: inherit; }
+  button { border: 0; border-radius: 10px; padding: 12px 16px; background: var(--panel); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; }
+  button:active { opacity: .75; }
+
+  /* Start screen */
+  #start { max-width: 420px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 28px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  label { display: block; color: var(--muted); font-size: 14px; margin-bottom: 6px; }
+  #room { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #2c2f36; background: var(--panel); color: var(--text); }
+  .row { display: flex; gap: 8px; margin-top: 12px; }
+  .row > button { flex: 1; }
+  .hint { color: var(--muted); font-size: 13px; margin-top: 16px; }
+
+  /* Stage (camera / viewer) */
+  #stage { position: fixed; inset: 0; background: #000; }
+  #video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+  .bar { position: absolute; left: 0; right: 0; display: flex; gap: 8px; flex-wrap: wrap; padding: 10px 12px;
+    background: linear-gradient(rgba(0,0,0,.65), rgba(0,0,0,0)); }
+  .bar.top { top: 0; padding-top: calc(10px + env(safe-area-inset-top)); align-items: center; }
+  .bar.bottom { bottom: 0; padding-bottom: calc(10px + env(safe-area-inset-bottom));
+    background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,.7)); }
+  .bar button { background: rgba(40,42,48,.85); padding: 10px 14px; }
+  #status { flex: 1; min-width: 0; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.err { background: var(--err); }
+  #shareBox { width: 100%; font-size: 13px; color: var(--muted); word-break: break-all; }
+  #shareBox a { color: var(--text); }
+  #turnHint { position: absolute; left: 12px; right: 12px; top: 50%; transform: translateY(-50%);
+    background: rgba(26,28,33,.95); border-radius: 12px; padding: 16px; font-size: 14px; }
+  #dimmer { position: fixed; inset: 0; background: #000; z-index: 10; display: flex; align-items: flex-end; justify-content: center;
+    color: #222; font-size: 12px; padding-bottom: 24px; }
+</style>
+</head>
+<body>
+
+<section id="start">
+  <h1>SECam</h1>
+  <p class="sub">Камера наблюдения из старого айфона. Видео идёт напрямую между устройствами.</p>
+  <label for="room">Код комнаты (длинный и случайный: его знание = доступ к видео)</label>
+  <input id="room" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="например, garage-7f3k9q2m">
+  <div class="row">
+    <button id="genBtn">Сгенерировать</button>
+  </div>
+  <div class="row">
+    <button id="camBtn" class="primary">Это камера</button>
+    <button id="viewBtn">Смотреть</button>
+  </div>
+  <p class="hint">На камере: «Автоблокировка → Никогда», зарядка, Safari не сворачивать. Для защиты от случайного выхода включите Гид-доступ.</p>
+</section>
+
+<section id="stage" class="hidden">
+  <video id="video" playsinline autoplay muted></video>
+  <div class="bar top">
+    <div id="status"><span class="dot" id="dot"></span><span id="statusText">…</span></div>
+  </div>
+  <div id="turnHint" class="hidden">
+    Не удаётся установить прямое соединение (вероятно, оба устройства за симметричным NAT, например на мобильном интернете).
+    Нужен TURN-сервер: впишите его данные в массив <code>ICE_SERVERS</code> в начале скрипта.
+    <div class="row"><button id="hideHint">Понятно</button></div>
+  </div>
+  <div class="bar bottom">
+    <div id="shareBox" class="hidden"></div>
+    <!-- camera controls -->
+    <button id="copyBtn" class="cam-only">Копировать ссылку</button>
+    <button id="flipBtn" class="cam-only">Сменить камеру</button>
+    <button id="dimBtn" class="cam-only">Затемнить</button>
+    <!-- viewer controls -->
+    <button id="snapBtn" class="view-only">Снимок</button>
+    <button id="fsBtn" class="view-only">На весь экран</button>
+    <button id="exitBtn">Выход</button>
+  </div>
+</section>
+
+<div id="dimmer" class="hidden">коснитесь, чтобы включить экран</div>
+
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+'use strict';
+
+// STUN по умолчанию. Если прямое соединение не устанавливается, добавьте TURN, например:
+// { urls: 'turn:YOUR_TURN_HOST:443?transport=tcp', username: '...', credential: '...' }
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+];
+const PEER_OPTIONS = { config: { iceServers: ICE_SERVERS }, debug: 1 };
+const RETRY_MS = 5000;
+
+const $ = (id) => document.getElementById(id);
+const els = {
+  start: $('start'), stage: $('stage'), room: $('room'), video: $('video'),
+  dot: $('dot'), statusText: $('statusText'), shareBox: $('shareBox'),
+  turnHint: $('turnHint'), dimmer: $('dimmer'),
+};
+
+function setStatus(text, level) {
+  els.statusText.textContent = text;
+  els.dot.className = 'dot' + (level ? ' ' + level : '');
+}
+
+function cleanRoom(s) { return (s || '').trim().toLowerCase(); }
+
+function randomRoom() {
+  const a = new Uint8Array(12);
+  crypto.getRandomValues(a);
+  return 'cam-' + Array.from(a, (b) => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join('');
+}
+
+// ID камеры в PeerJS = хеш кода комнаты, чтобы сам код не светился на сигнальном сервере.
+async function cameraPeerId(room) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('secam:' + room));
+  return 'secam-' + Array.from(new Uint8Array(buf).slice(0, 16), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function viewUrl(room) {
+  const u = new URL(location.href);
+  u.search = '';
+  u.hash = 'view=' + encodeURIComponent(room);
+  return u.toString();
+}
+
+function showStage(mode) {
+  els.start.classList.add('hidden');
+  els.stage.classList.remove('hidden');
+  document.querySelectorAll('.cam-only').forEach((b) => b.classList.toggle('hidden', mode !== 'camera'));
+  document.querySelectorAll('.view-only').forEach((b) => b.classList.toggle('hidden', mode !== 'viewer'));
+}
+
+function watchIce(pc) {
+  if (!pc) return;
+  pc.addEventListener('iceconnectionstatechange', () => {
+    if (pc.iceConnectionState === 'failed') els.turnHint.classList.remove('hidden');
+  });
+}
+
+/* ================= CAMERA ================= */
+async function startCamera(room) {
+  showStage('camera');
+  setStatus('Запрашиваю доступ к камере…', 'warn');
+
+  let facing = 'environment';
+  let stream = null;
+  const viewers = new Map(); // peerId -> { conn, call }
+
+  async function getStream() {
+    return navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24, max: 30 } },
+    });
+  }
+
+  async function replaceStream(newStream) {
+    const old = stream;
+    stream = newStream;
+    els.video.srcObject = stream;
+    const track = stream.getVideoTracks()[0];
+    track.addEventListener('ended', onTrackEnded);
+    for (const { call } of viewers.values()) {
+      const sender = call && call.peerConnection && call.peerConnection.getSenders().find((s) => s.track && s.track.kind === 'video');
+      if (sender) await sender.replaceTrack(track);
+    }
+    if (old && old !== stream) old.getTracks().forEach((t) => t.stop());
+  }
+
+  async function restartCapture() {
+    try { await replaceStream(await getStream()); }
+    catch (e) { setStatus('Камера недоступна: ' + e.message, 'err'); }
+  }
+
+  function onTrackEnded() {
+    // iOS останавливает камеру, когда Safari уходит в фон. Перезапускаем при возвращении.
+    if (document.visibilityState === 'visible') restartCapture();
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    const t = stream && stream.getVideoTracks()[0];
+    if (!t || t.readyState === 'ended') restartCapture();
+    requestWakeLock();
+  });
+
+  try {
+    await replaceStream(await getStream());
+  } catch (e) {
+    setStatus('Нет доступа к камере: ' + e.message, 'err');
+    return;
+  }
+
+  const link = viewUrl(room);
+  els.shareBox.classList.remove('hidden');
+  els.shareBox.innerHTML = 'Ссылка для просмотра: ';
+  const a = document.createElement('a');
+  a.href = link; a.textContent = link; a.target = '_blank';
+  els.shareBox.appendChild(a);
+
+  $('copyBtn').onclick = async () => {
+    try { await navigator.clipboard.writeText(link); $('copyBtn').textContent = 'Скопировано'; }
+    catch { prompt('Скопируйте ссылку:', link); }
+    setTimeout(() => ($('copyBtn').textContent = 'Копировать ссылку'), 1500);
+  };
+  $('flipBtn').onclick = () => { facing = facing === 'environment' ? 'user' : 'environment'; restartCapture(); };
+  $('dimBtn').onclick = () => els.dimmer.classList.remove('hidden');
+  els.dimmer.onclick = () => els.dimmer.classList.add('hidden');
+
+  requestWakeLock();
+
+  const id = await cameraPeerId(room);
+  let peer;
+
+  function updateCount() {
+    const n = viewers.size;
+    setStatus(n ? `В эфире · зрителей: ${n}` : 'В эфире · ждём зрителей', 'ok');
+  }
+
+  function connectPeer() {
+    peer = new Peer(id, PEER_OPTIONS);
+    peer.on('open', updateCount);
+    peer.on('connection', (conn) => {
+      conn.on('open', () => {
+        const call = peer.call(conn.peer, stream);
+        watchIce(call.peerConnection);
+        const prev = viewers.get(conn.peer);
+        if (prev) { try { prev.call.close(); } catch {} }
+        viewers.set(conn.peer, { conn, call });
+        const drop = () => { if (viewers.get(conn.peer)?.conn === conn) { viewers.delete(conn.peer); updateCount(); } };
+        conn.on('close', drop);
+        call.on('close', drop);
+        call.on('error', drop);
+        updateCount();
+      });
+    });
+    peer.on('disconnected', () => {
+      setStatus('Потеряна связь с сигнальным сервером, переподключаюсь…', 'warn');
+      setTimeout(() => { if (!peer.destroyed) peer.reconnect(); }, 1000);
+    });
+    peer.on('error', (err) => {
+      if (err.type === 'unavailable-id') {
+        setStatus('Эта комната уже занята другой камерой (или прошлая сессия ещё не закрылась). Повтор…', 'err');
+        peer.destroy();
+        setTimeout(connectPeer, RETRY_MS);
+      } else if (['network', 'server-error', 'socket-error', 'socket-closed'].includes(err.type)) {
+        setStatus('Ошибка сети, повтор…', 'warn');
+        peer.destroy();
+        setTimeout(connectPeer, RETRY_MS);
+      } else {
+        console.warn('peer error', err.type, err);
+      }
+    });
+  }
+  connectPeer();
+
+  $('exitBtn').onclick = () => { try { peer.destroy(); } catch {} location.hash = ''; location.reload(); };
+}
+
+let wakeLock = null;
+async function requestWakeLock() {
+  // Screen Wake Lock есть только с iOS 16.4; на iOS 15 полагаемся на «Автоблокировка → Никогда».
+  if (!('wakeLock' in navigator) || wakeLock) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => { wakeLock = null; });
+  } catch {}
+}
+
+/* ================= VIEWER ================= */
+async function startViewer(room) {
+  showStage('viewer');
+  setStatus('Подключаюсь…', 'warn');
+  const camId = await cameraPeerId(room);
+  let peer, conn, retryTimer;
+
+  function scheduleRetry(msg) {
+    setStatus(msg, 'warn');
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(dial, RETRY_MS);
+  }
+
+  function dial() {
+    if (!peer || peer.destroyed) return;
+    if (peer.disconnected) { peer.reconnect(); return; }
+    if (conn) { try { conn.close(); } catch {} }
+    setStatus('Ищу камеру…', 'warn');
+    conn = peer.connect(camId, { reliable: true });
+    conn.on('close', () => scheduleRetry('Камера отключилась, повтор…'));
+  }
+
+  peer = new Peer(PEER_OPTIONS);
+  peer.on('open', dial);
+  peer.on('call', (call) => {
+    call.answer();
+    watchIce(call.peerConnection);
+    call.on('stream', (s) => {
+      els.video.srcObject = s;
+      els.video.play().catch(() => {});
+      els.turnHint.classList.add('hidden');
+      setStatus('Смотрю', 'ok');
+    });
+    call.on('close', () => scheduleRetry('Поток прервался, повтор…'));
+  });
+  peer.on('disconnected', () => scheduleRetry('Потеряна связь с сигнальным сервером…'));
+  peer.on('error', (err) => {
+    if (err.type === 'peer-unavailable') scheduleRetry('Камера не в сети, повтор через 5 с…');
+    else scheduleRetry('Ошибка: ' + err.type + ', повтор…');
+  });
+
+  $('snapBtn').onclick = () => {
+    const v = els.video;
+    if (!v.videoWidth) return;
+    const c = document.createElement('canvas');
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext('2d').drawImage(v, 0, 0);
+    c.toBlob((blob) => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'secam-' + new Date().toISOString().replace(/[:.]/g, '-') + '.png';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    }, 'image/png');
+  };
+  $('fsBtn').onclick = () => {
+    const v = els.video;
+    if (v.webkitEnterFullscreen) v.webkitEnterFullscreen();
+    else if (els.stage.requestFullscreen) els.stage.requestFullscreen();
+  };
+  $('exitBtn').onclick = () => { try { peer.destroy(); } catch {} location.hash = ''; location.reload(); };
+}
+
+/* ================= START ================= */
+$('hideHint').onclick = () => els.turnHint.classList.add('hidden');
+$('genBtn').onclick = () => { els.room.value = randomRoom(); };
+
+try { els.room.value = localStorage.getItem('secam-room') || ''; } catch {}
+
+function go(mode) {
+  const room = cleanRoom(els.room.value);
+  if (room.length < 8) { alert('Код комнаты должен быть не короче 8 символов.'); return; }
+  try { localStorage.setItem('secam-room', room); } catch {}
+  if (typeof Peer === 'undefined') { alert('Не загрузилась библиотека PeerJS. Проверьте интернет.'); return; }
+  if (!window.isSecureContext) { alert('Нужен HTTPS: без него Safari не даст доступ к камере.'); return; }
+  mode === 'camera' ? startCamera(room) : startViewer(room);
+}
+$('camBtn').onclick = () => go('camera');
+$('viewBtn').onclick = () => go('viewer');
+
+// Ссылка вида …#view=<код> сразу открывает просмотр.
+const m = location.hash.match(/^#view=(.+)$/);
+if (m) { els.room.value = decodeURIComponent(m[1]); go('viewer'); }
+</script>
+</body>
+</html>
