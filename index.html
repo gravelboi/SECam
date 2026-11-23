@@ -102,7 +102,7 @@
 <script>
 'use strict';
 
-const VERSION = 'v4 · 2026-11-23';
+const VERSION = 'v5 · 2026-11-23';
 
 /* ================= НАСТРОЙКИ ================= */
 // Сигнализация: публичные MQTT-брокеры (WebSocket). Используются все сразу, хватит любого одного.
@@ -452,6 +452,11 @@ async function startCamera(room) {
     const existing = viewers.get(vid);
     if (existing && existing.sid === sid) return; // уже обрабатываем эту попытку
     if (existing) dropViewer(vid, 'новая попытка');
+    if (viewers.size >= MAX_VIEWERS) {
+      // Сначала освобождаем места, занятые неудачными попытками (зритель перезагрузил страницу и т.п.).
+      const stale = Array.from(viewers.entries()).find(([, x]) => !x.connected);
+      if (stale) dropViewer(stale[0], 'вытеснен новой попыткой');
+    }
     if (viewers.size >= MAX_VIEWERS) { log(`[cam] отказ ${vid}: максимум зрителей`); return; }
 
     log(`[cam] готовлю offer для ${vid}`);
