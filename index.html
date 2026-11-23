@@ -98,20 +98,32 @@
 
 <div id="dimmer" class="hidden">коснитесь, чтобы включить экран</div>
 
-<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
 
-// STUN по умолчанию. Если прямое соединение не устанавливается, добавьте TURN, например:
+/* ================= НАСТРОЙКИ ================= */
+// Сигнализация: публичные MQTT-брокеры (WebSocket). Используются все сразу, хватит любого одного.
+const BROKERS = [
+  'wss://broker.hivemq.com:8884/mqtt',
+  'wss://test.mosquitto.org:8081/mqtt',
+  'wss://broker.emqx.io:8084/mqtt',
+];
+// STUN, доступные без VPN (проверено diag.html). Если прямое соединение не устанавливается, добавьте TURN:
 // { urls: 'turn:YOUR_TURN_HOST:443?transport=tcp', username: '...', credential: '...' }
 const ICE_SERVERS = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:stun.sipnet.ru:3478' },
 ];
-const PEER_OPTIONS = { config: { iceServers: ICE_SERVERS }, debug: 1 };
-const RETRY_MS = 5000;
+const RTC_CONFIG = { iceServers: ICE_SERVERS };
+const MAX_VIEWERS = 3;          // iPhone SE больше не потянет кодировать
+const MAX_BITRATE = 1500000;    // бит/с на зрителя
+const HELLO_EVERY_MS = 3000;
+const MSG_MAX_AGE_MS = 120000;  // защита от повторной отправки старых сообщений
 
+/* ================= УТИЛИТЫ ================= */
 const $ = (id) => document.getElementById(id);
+const enc = new TextEncoder();
+const dec = new TextDecoder();
 const els = {
   start: $('start'), stage: $('stage'), room: $('room'), video: $('video'),
   dot: $('dot'), statusText: $('statusText'), shareBox: $('shareBox'),
@@ -122,7 +134,7 @@ const logLines = [];
 function log(msg) {
   const t = new Date().toTimeString().slice(0, 8);
   logLines.push(t + ' ' + msg);
-  if (logLines.length > 200) logLines.shift();
+  if (logLines.length > 300) logLines.shift();
   const el = $('log');
   el.textContent = logLines.join('\n');
   el.scrollTop = el.scrollHeight;
@@ -135,52 +147,18 @@ function setStatus(text, level) {
   els.dot.className = 'dot' + (level ? ' ' + level : '');
 }
 
-// Подробности о событиях PeerJS для журнала.
-function tracePeer(peer, name) {
-  peer.on('open', (id) => log(`[${name}] signaling open, id=${id.slice(0, 14)}…`));
-  peer.on('disconnected', () => log(`[${name}] signaling disconnected, online=${navigator.onLine}`));
-  peer.on('close', () => log(`[${name}] peer closed`));
-  peer.on('error', (e) => log(`[${name}] error type=${e.type} msg=${e.message}`));
-}
-window.addEventListener('online', () => log('[net] online'));
-window.addEventListener('offline', () => log('[net] offline'));
-log(`[init] ${navigator.userAgent}`);
-
-// Самостоятельная проверка сигнального сервера: HTTP и WebSocket в обход PeerJS.
-async function probeSignaling() {
-  const host = '0.peerjs.com';
-  const t0 = performance.now();
-  try {
-    const r = await fetch(`https://${host}/peerjs/id?ts=${Date.now()}`, { cache: 'no-store' });
-    log(`[probe] HTTP ${r.status} за ${Math.round(performance.now() - t0)} мс`);
-  } catch (e) {
-    log(`[probe] HTTP не удался: ${e.message}`);
-  }
-  await new Promise((resolve) => {
-    const t1 = performance.now();
-    const id = 'secam-probe-' + Math.random().toString(36).slice(2, 10);
-    let ws;
-    try { ws = new WebSocket(`wss://${host}/peerjs?key=peerjs&id=${id}&token=probe&version=1.5.4`); }
-    catch (e) { log(`[probe] WebSocket не создан: ${e.message}`); return resolve(); }
-    const timer = setTimeout(() => { log('[probe] WebSocket: нет ответа 10 с'); try { ws.close(); } catch {} resolve(); }, 10000);
-    ws.onmessage = (m) => { log(`[probe] WebSocket OK за ${Math.round(performance.now() - t1)} мс: ${String(m.data).slice(0, 60)}`); clearTimeout(timer); ws.close(); resolve(); };
-    ws.onerror = () => log('[probe] WebSocket error');
-    ws.onclose = (e) => { log(`[probe] WebSocket closed code=${e.code}`); clearTimeout(timer); resolve(); };
-  });
-}
-
-function cleanRoom(s) { return (s || '').trim().toLowerCase(); }
-
-function randomRoom() {
-  const a = new Uint8Array(12);
+function randId(n = 12) {
+  const a = new Uint8Array(n);
   crypto.getRandomValues(a);
-  return 'cam-' + Array.from(a, (b) => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join('');
+  return Array.from(a, (b) => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join('');
 }
-
-// ID камеры в PeerJS = хеш кода комнаты, чтобы сам код не светился на сигнальном сервере.
-async function cameraPeerId(room) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('secam:' + room));
-  return 'secam-' + Array.from(new Uint8Array(buf).slice(0, 16), (b) => b.toString(16).padStart(2, '0')).join('');
+function cleanRoom(s) { return (s || '').trim().toLowerCase(); }
+function hex(buf) { return Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join(''); }
+function concat(...parts) {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out;
 }
 
 function viewUrl(room) {
@@ -197,11 +175,148 @@ function showStage(mode) {
   document.querySelectorAll('.view-only').forEach((b) => b.classList.toggle('hidden', mode !== 'viewer'));
 }
 
-function watchIce(pc) {
-  if (!pc) return;
-  pc.addEventListener('iceconnectionstatechange', () => {
-    if (pc.iceConnectionState === 'failed') els.turnHint.classList.remove('hidden');
+// Ждём, пока соберутся ICE-кандидаты, чтобы отправить SDP одним сообщением.
+function waitIce(pc, ms = 3000) {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(t); pc.removeEventListener('icegatheringstatechange', check); resolve(); };
+    const check = () => { if (pc.iceGatheringState === 'complete') done(); };
+    const t = setTimeout(done, ms);
+    pc.addEventListener('icegatheringstatechange', check);
   });
+}
+
+function candidateSummary(sdp) {
+  const types = {};
+  for (const m of sdp.matchAll(/ typ (\w+)/g)) types[m[1]] = (types[m[1]] || 0) + 1;
+  return Object.entries(types).map(([k, v]) => `${k}:${v}`).join(' ') || 'нет кандидатов';
+}
+
+/* ================= MQTT 3.1.1 поверх WebSocket (минимум: QoS 0) ================= */
+function mqttVarint(n) {
+  const out = [];
+  do { let b = n % 128; n = Math.floor(n / 128); if (n > 0) b |= 128; out.push(b); } while (n > 0);
+  return Uint8Array.from(out);
+}
+function mqttStr(s) { const b = enc.encode(s); return concat(Uint8Array.of(b.length >> 8, b.length & 255), b); }
+function mqttPacket(header, body) { return concat(Uint8Array.of(header), mqttVarint(body.length), body); }
+
+class MqttConn {
+  constructor(url, topic, onMessage, onState) {
+    this.url = url; this.topic = topic; this.onMessage = onMessage; this.onState = onState;
+    this.host = new URL(url).hostname;
+    this.ready = false; this.fails = 0; this.stopped = false;
+    this.connect();
+  }
+  connect() {
+    if (this.stopped) return;
+    this.buf = new Uint8Array(0);
+    let ws;
+    try { ws = new WebSocket(this.url, 'mqtt'); } catch (e) { log(`[mqtt] ${this.host}: ${e.message}`); return this.retry(); }
+    this.ws = ws;
+    ws.binaryType = 'arraybuffer';
+    const timeout = setTimeout(() => { if (!this.ready) { log(`[mqtt] ${this.host}: таймаут`); try { ws.close(); } catch {} } }, 10000);
+    ws.onopen = () => {
+      const flags = 0x02; // clean session
+      ws.send(mqttPacket(0x10, concat(mqttStr('MQTT'), Uint8Array.of(4, flags, 0, 30), mqttStr('secam' + randId(16)))));
+    };
+    ws.onmessage = (e) => this.feed(new Uint8Array(e.data));
+    ws.onerror = () => {};
+    ws.onclose = (e) => {
+      clearTimeout(timeout);
+      clearInterval(this.pinger);
+      if (this.ready) log(`[mqtt] ${this.host}: отключён (code ${e.code})`);
+      this.ready = false;
+      this.onState();
+      this.retry();
+    };
+  }
+  retry() {
+    if (this.stopped) return;
+    const delay = Math.min(30000, 2000 * 2 ** Math.min(this.fails++, 4));
+    setTimeout(() => this.connect(), delay);
+  }
+  feed(chunk) {
+    this.buf = this.buf.length ? concat(this.buf, chunk) : chunk;
+    for (;;) {
+      const b = this.buf;
+      if (b.length < 2) return;
+      let len = 0, mult = 1, i = 1, byte;
+      do {
+        if (i >= b.length) return;
+        byte = b[i++]; len += (byte & 127) * mult; mult *= 128;
+      } while (byte & 128);
+      if (b.length < i + len) return;
+      const type = b[0] >> 4, flags = b[0] & 15;
+      const body = b.slice(i, i + len);
+      this.buf = b.slice(i + len);
+      this.handle(type, flags, body);
+    }
+  }
+  handle(type, flags, body) {
+    if (type === 2) { // CONNACK
+      if (body[1] !== 0) { log(`[mqtt] ${this.host}: отказ, код ${body[1]}`); this.ws.close(); return; }
+      this.ws.send(mqttPacket(0x82, concat(Uint8Array.of(0, 1), mqttStr(this.topic), Uint8Array.of(0))));
+      this.ready = true; this.fails = 0;
+      this.pinger = setInterval(() => { try { this.ws.send(Uint8Array.of(0xC0, 0)); } catch {} }, 20000);
+      log(`[mqtt] ${this.host}: подключён`);
+      this.onState();
+    } else if (type === 3) { // PUBLISH
+      const tlen = (body[0] << 8) | body[1];
+      let p = 2 + tlen;
+      if ((flags >> 1) & 3) p += 2; // packet id при QoS > 0
+      this.onMessage(body.slice(p));
+    }
+  }
+  publish(payload) {
+    if (!this.ready) return;
+    try { this.ws.send(mqttPacket(0x30, concat(mqttStr(this.topic), payload))); } catch {}
+  }
+  stop() { this.stopped = true; try { this.ws.close(); } catch {} }
+}
+
+/* ================= Зашифрованный сигнальный канал ================= */
+// Тема и ключ выводятся из кода комнаты. Брокеры публичные, поэтому всё содержимое
+// шифруется AES-GCM: без кода комнаты нельзя ни прочитать сообщения, ни подключиться к камере.
+class Signal {
+  static async create(room, onMsg) {
+    const topic = 'secam/v1/' + hex(await crypto.subtle.digest('SHA-256', enc.encode('topic:' + room))).slice(0, 32);
+    const base = await crypto.subtle.importKey('raw', enc.encode(room), 'PBKDF2', false, ['deriveKey']);
+    const key = await crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt: enc.encode('secam-v1-salt'), iterations: 100000, hash: 'SHA-256' },
+      base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    return new Signal(topic, key, onMsg);
+  }
+  constructor(topic, key, onMsg) {
+    this.id = randId(10);
+    this.key = key; this.onMsg = onMsg;
+    this.seen = new Set();
+    this.onReadyChange = () => {};
+    this.conns = BROKERS.map((u) => new MqttConn(u, topic, (p) => this.recv(p), () => this.onReadyChange()));
+  }
+  readyCount() { return this.conns.filter((c) => c.ready).length; }
+  async send(obj) {
+    const msg = { ...obj, from: this.id, ts: Date.now(), mid: randId(8) };
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, this.key, enc.encode(JSON.stringify(msg))));
+    const payload = concat(iv, ct);
+    this.conns.forEach((c) => c.publish(payload));
+  }
+  async recv(payload) {
+    let msg;
+    try {
+      const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: payload.slice(0, 12) }, this.key, payload.slice(12));
+      msg = JSON.parse(dec.decode(pt));
+    } catch { return; } // чужое или повреждённое сообщение
+    if (msg.from === this.id) return;           // своё эхо
+    if (this.seen.has(msg.mid)) return;         // дубль с другого брокера
+    this.seen.add(msg.mid);
+    if (this.seen.size > 500) this.seen = new Set(Array.from(this.seen).slice(-250));
+    if (Math.abs(Date.now() - msg.ts) > MSG_MAX_AGE_MS) return;
+    if (msg.to && msg.to !== this.id) return;
+    this.onMsg(msg);
+  }
+  stop() { this.conns.forEach((c) => c.stop()); }
 }
 
 /* ================= CAMERA ================= */
@@ -211,7 +326,7 @@ async function startCamera(room) {
 
   let facing = 'environment';
   let stream = null;
-  const viewers = new Map(); // peerId -> { conn, call }
+  const viewers = new Map(); // viewerId -> { pc, sid, timer }
 
   async function getStream() {
     return navigator.mediaDevices.getUserMedia({
@@ -226,20 +341,20 @@ async function startCamera(room) {
     els.video.srcObject = stream;
     const track = stream.getVideoTracks()[0];
     track.addEventListener('ended', onTrackEnded);
-    for (const { call } of viewers.values()) {
-      const sender = call && call.peerConnection && call.peerConnection.getSenders().find((s) => s.track && s.track.kind === 'video');
-      if (sender) await sender.replaceTrack(track);
+    for (const { pc } of viewers.values()) {
+      const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
+      if (sender) { try { await sender.replaceTrack(track); } catch (e) { log('replaceTrack: ' + e.message); } }
     }
     if (old && old !== stream) old.getTracks().forEach((t) => t.stop());
   }
 
   async function restartCapture() {
-    try { await replaceStream(await getStream()); }
+    try { await replaceStream(await getStream()); log('[cam] захват перезапущен'); }
     catch (e) { setStatus('Камера недоступна: ' + e.message, 'err'); }
   }
 
   function onTrackEnded() {
-    // iOS останавливает камеру, когда Safari уходит в фон. Перезапускаем при возвращении.
+    log('[cam] видеодорожка остановлена системой');
     if (document.visibilityState === 'visible') restartCapture();
   }
 
@@ -259,7 +374,7 @@ async function startCamera(room) {
 
   const link = viewUrl(room);
   els.shareBox.classList.remove('hidden');
-  els.shareBox.innerHTML = 'Ссылка для просмотра: ';
+  els.shareBox.textContent = 'Ссылка для просмотра: ';
   const a = document.createElement('a');
   a.href = link; a.textContent = link; a.target = '_blank';
   els.shareBox.appendChild(a);
@@ -272,56 +387,87 @@ async function startCamera(room) {
   $('flipBtn').onclick = () => { facing = facing === 'environment' ? 'user' : 'environment'; restartCapture(); };
   $('dimBtn').onclick = () => els.dimmer.classList.remove('hidden');
   els.dimmer.onclick = () => els.dimmer.classList.add('hidden');
-
   requestWakeLock();
 
-  const id = await cameraPeerId(room);
-  let peer;
+  setStatus('Подключаюсь к сигнальным серверам…', 'warn');
+  const signal = await Signal.create(room, onMsg);
 
-  function updateCount() {
-    const n = viewers.size;
-    setStatus(n ? `В эфире · зрителей: ${n}` : 'В эфире · ждём зрителей', 'ok');
+  function updateStatus() {
+    const s = signal.readyCount();
+    const live = Array.from(viewers.values()).filter((v) => v.connected).length;
+    if (!s && !live) return setStatus(`Нет связи с сигнальными серверами (0/${BROKERS.length}), повторяю…`, 'err');
+    setStatus(`В эфире · зрителей: ${live} · сигнал ${s}/${BROKERS.length}`, s ? 'ok' : 'warn');
+  }
+  signal.onReadyChange = updateStatus;
+
+  function dropViewer(vid, why) {
+    const v = viewers.get(vid);
+    if (!v) return;
+    clearTimeout(v.timer);
+    try { v.pc.close(); } catch {}
+    viewers.delete(vid);
+    log(`[cam] зритель ${vid} отключён: ${why}`);
+    updateStatus();
   }
 
-  function connectPeer() {
-    peer = new Peer(id, PEER_OPTIONS);
-    tracePeer(peer, 'cam');
-    peer.on('open', updateCount);
-    peer.on('connection', (conn) => {
-      conn.on('open', () => {
-        const call = peer.call(conn.peer, stream);
-        watchIce(call.peerConnection);
-        const prev = viewers.get(conn.peer);
-        if (prev) { try { prev.call.close(); } catch {} }
-        viewers.set(conn.peer, { conn, call });
-        const drop = () => { if (viewers.get(conn.peer)?.conn === conn) { viewers.delete(conn.peer); updateCount(); } };
-        conn.on('close', drop);
-        call.on('close', drop);
-        call.on('error', drop);
-        updateCount();
-      });
+  async function offerTo(vid, sid) {
+    const existing = viewers.get(vid);
+    if (existing && existing.sid === sid) return; // уже обрабатываем эту попытку
+    if (existing) dropViewer(vid, 'новая попытка');
+    if (viewers.size >= MAX_VIEWERS) { log(`[cam] отказ ${vid}: максимум зрителей`); return; }
+
+    const pc = new RTCPeerConnection(RTC_CONFIG);
+    const v = { pc, sid, connected: false, timer: null };
+    viewers.set(vid, v);
+    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+    pc.addEventListener('iceconnectionstatechange', () => {
+      const st = pc.iceConnectionState;
+      log(`[cam] ${vid} ice=${st}`);
+      clearTimeout(v.timer);
+      if (st === 'connected' || st === 'completed') { v.connected = true; updateStatus(); }
+      else if (st === 'failed' || st === 'closed') dropViewer(vid, st);
+      else if (st === 'disconnected') v.timer = setTimeout(() => dropViewer(vid, 'нет связи 10 с'), 10000);
     });
-    peer.on('disconnected', () => {
-      setStatus('Потеряна связь с сигнальным сервером, переподключаюсь…', 'warn');
-      setTimeout(() => { if (!peer.destroyed) peer.reconnect(); }, 1000);
-    });
-    peer.on('error', (err) => {
-      if (err.type === 'unavailable-id') {
-        setStatus('Эта комната уже занята другой камерой (или прошлая сессия ещё не закрылась). Повтор…', 'err');
-        peer.destroy();
-        setTimeout(connectPeer, RETRY_MS);
-      } else if (['network', 'server-error', 'socket-error', 'socket-closed'].includes(err.type)) {
-        setStatus('Ошибка сети, повтор…', 'warn');
-        peer.destroy();
-        setTimeout(connectPeer, RETRY_MS);
-      } else {
-        console.warn('peer error', err.type, err);
+    // Если за 30 с соединение не установилось — освобождаем место.
+    v.timer = setTimeout(() => { if (!v.connected) dropViewer(vid, 'не подключился за 30 с'); }, 30000);
+
+    await pc.setLocalDescription(await pc.createOffer());
+    await waitIce(pc);
+    if (viewers.get(vid) !== v) return;
+    log(`[cam] offer → ${vid} (${candidateSummary(pc.localDescription.sdp)})`);
+    await signal.send({ t: 'offer', to: vid, sid, sdp: pc.localDescription.sdp });
+  }
+
+  async function onMsg(m) {
+    try {
+      if (m.t === 'hello') {
+        await offerTo(m.from, m.sid);
+      } else if (m.t === 'answer') {
+        const v = viewers.get(m.from);
+        if (!v || v.sid !== m.sid || v.pc.signalingState !== 'have-local-offer') return;
+        log(`[cam] answer ← ${m.from} (${candidateSummary(m.sdp)})`);
+        await v.pc.setRemoteDescription({ type: 'answer', sdp: m.sdp });
+        limitBitrate(v.pc);
+      } else if (m.t === 'bye') {
+        dropViewer(m.from, 'зритель вышел');
       }
-    });
+    } catch (e) { log('[cam] ошибка: ' + e.message); }
   }
-  connectPeer();
 
-  $('exitBtn').onclick = () => { try { peer.destroy(); } catch {} location.hash = ''; location.reload(); };
+  updateStatus();
+  $('exitBtn').onclick = () => { signal.stop(); location.hash = ''; location.reload(); };
+}
+
+async function limitBitrate(pc) {
+  for (const s of pc.getSenders()) {
+    if (!s.track || s.track.kind !== 'video' || !s.getParameters) continue;
+    try {
+      const p = s.getParameters();
+      if (!p.encodings || !p.encodings.length) continue;
+      p.encodings[0].maxBitrate = MAX_BITRATE;
+      await s.setParameters(p);
+    } catch {}
+  }
 }
 
 let wakeLock = null;
@@ -337,44 +483,86 @@ async function requestWakeLock() {
 /* ================= VIEWER ================= */
 async function startViewer(room) {
   showStage('viewer');
-  setStatus('Подключаюсь…', 'warn');
-  const camId = await cameraPeerId(room);
-  let peer, conn, retryTimer;
+  setStatus('Подключаюсь к сигнальным серверам…', 'warn');
 
-  function scheduleRetry(msg) {
-    setStatus(msg, 'warn');
-    clearTimeout(retryTimer);
-    retryTimer = setTimeout(dial, RETRY_MS);
+  let pc = null, sid = null, camId = null, helloTimer = null, watchdog = null, hellos = 0;
+  const signal = await Signal.create(room, onMsg);
+  let wasReady = 0;
+  signal.onReadyChange = () => {
+    const s = signal.readyCount();
+    if (!pc && s && !wasReady) sayHello(false); // первый брокер подключился — не ждём таймера
+    wasReady = s;
+  };
+
+  function sayHello(count = true) {
+    if (pc) return;
+    const s = signal.readyCount();
+    if (!s) { setStatus(`Нет связи с сигнальными серверами (0/${BROKERS.length}), повторяю…`, 'err'); return; }
+    if (count) hellos++;
+    setStatus(hellos > 3 ? `Камера не отвечает, жду… (сигнал ${s}/${BROKERS.length})` : `Ищу камеру… (сигнал ${s}/${BROKERS.length})`, 'warn');
+    signal.send({ t: 'hello', sid });
   }
 
-  function dial() {
-    if (!peer || peer.destroyed) return;
-    if (peer.disconnected) { peer.reconnect(); return; }
-    if (conn) { try { conn.close(); } catch {} }
-    setStatus('Ищу камеру…', 'warn');
-    conn = peer.connect(camId, { reliable: true });
-    conn.on('close', () => scheduleRetry('Камера отключилась, повтор…'));
+  function reset(reason) {
+    if (reason) log('[view] сброс: ' + reason);
+    clearTimeout(watchdog);
+    if (pc) { try { pc.close(); } catch {} }
+    pc = null; camId = null; hellos = 0;
+    sid = randId(8);
+    clearInterval(helloTimer);
+    helloTimer = setInterval(sayHello, HELLO_EVERY_MS);
+    sayHello();
   }
 
-  peer = new Peer(PEER_OPTIONS);
-  tracePeer(peer, 'view');
-  peer.on('open', dial);
-  peer.on('call', (call) => {
-    call.answer();
-    watchIce(call.peerConnection);
-    call.on('stream', (s) => {
-      els.video.srcObject = s;
-      els.video.play().catch(() => {});
-      els.turnHint.classList.add('hidden');
-      setStatus('Смотрю', 'ok');
-    });
-    call.on('close', () => scheduleRetry('Поток прервался, повтор…'));
-  });
-  peer.on('disconnected', () => scheduleRetry('Потеряна связь с сигнальным сервером…'));
-  peer.on('error', (err) => {
-    if (err.type === 'peer-unavailable') scheduleRetry('Камера не в сети, повтор через 5 с…');
-    else scheduleRetry('Ошибка: ' + err.type + ', повтор…');
-  });
+  async function onMsg(m) {
+    if (m.t !== 'offer' || m.sid !== sid || pc) return;
+    try {
+      clearInterval(helloTimer);
+      camId = m.from;
+      log(`[view] offer ← ${camId} (${candidateSummary(m.sdp)})`);
+      setStatus('Соединяюсь с камерой…', 'warn');
+      const mine = pc = new RTCPeerConnection(RTC_CONFIG);
+      pc.addEventListener('track', (e) => {
+        els.video.srcObject = e.streams[0] || new MediaStream([e.track]);
+        els.video.play().catch(() => {});
+      });
+      pc.addEventListener('iceconnectionstatechange', () => {
+        if (pc !== mine) return;
+        const st = mine.iceConnectionState;
+        log(`[view] ice=${st}`);
+        if (st === 'connected' || st === 'completed') {
+          clearTimeout(watchdog);
+          els.turnHint.classList.add('hidden');
+          setStatus('Смотрю', 'ok');
+        } else if (st === 'failed') {
+          els.turnHint.classList.remove('hidden');
+          reset('ice failed');
+        } else if (st === 'disconnected') {
+          setStatus('Связь с камерой прервалась…', 'warn');
+          clearTimeout(watchdog);
+          watchdog = setTimeout(() => { if (pc === mine && mine.iceConnectionState !== 'connected' && mine.iceConnectionState !== 'completed') reset('нет связи 6 с'); }, 6000);
+        } else if (st === 'closed') {
+          reset('closed');
+        }
+      });
+      await pc.setRemoteDescription({ type: 'offer', sdp: m.sdp });
+      await pc.setLocalDescription(await pc.createAnswer());
+      await waitIce(pc);
+      if (pc !== mine) return;
+      log(`[view] answer → ${camId} (${candidateSummary(pc.localDescription.sdp)})`);
+      await signal.send({ t: 'answer', to: camId, sid, sdp: pc.localDescription.sdp });
+      watchdog = setTimeout(() => {
+        if (pc !== mine) return;
+        const st = mine.iceConnectionState;
+        if (st !== 'connected' && st !== 'completed') { els.turnHint.classList.remove('hidden'); reset('не соединилось за 20 с'); }
+      }, 20000);
+    } catch (e) {
+      log('[view] ошибка: ' + e.message);
+      reset('ошибка');
+    }
+  }
+
+  reset();
 
   $('snapBtn').onclick = () => {
     const v = els.video;
@@ -395,25 +583,26 @@ async function startViewer(room) {
     if (v.webkitEnterFullscreen) v.webkitEnterFullscreen();
     else if (els.stage.requestFullscreen) els.stage.requestFullscreen();
   };
-  $('exitBtn').onclick = () => { try { peer.destroy(); } catch {} location.hash = ''; location.reload(); };
+  const leave = () => { if (camId) signal.send({ t: 'bye', to: camId }).catch(() => {}); };
+  window.addEventListener('pagehide', leave);
+  $('exitBtn').onclick = async () => { leave(); setTimeout(() => { signal.stop(); location.hash = ''; location.reload(); }, 300); };
 }
 
 /* ================= START ================= */
 $('hideHint').onclick = () => els.turnHint.classList.add('hidden');
+$('genBtn').onclick = () => { els.room.value = 'cam-' + randId(12); };
 $('logBtn').onclick = toggleLog;
 $('status').onclick = toggleLog;
-$('genBtn').onclick = () => { els.room.value = randomRoom(); };
+log(`[init] ${navigator.userAgent}`);
 
 try { els.room.value = localStorage.getItem('secam-room') || ''; } catch {}
 
 function go(mode) {
   const room = cleanRoom(els.room.value);
   if (room.length < 8) { alert('Код комнаты должен быть не короче 8 символов.'); return; }
+  if (!window.isSecureContext || !crypto.subtle) { alert('Нужен HTTPS: без него Safari не даст доступ к камере и шифрованию.'); return; }
   try { localStorage.setItem('secam-room', room); } catch {}
-  if (typeof Peer === 'undefined') { alert('Не загрузилась библиотека PeerJS. Проверьте интернет.'); return; }
-  if (!window.isSecureContext) { alert('Нужен HTTPS: без него Safari не даст доступ к камере.'); return; }
-  mode === 'camera' ? startCamera(room) : startViewer(room);
-  probeSignaling();
+  (mode === 'camera' ? startCamera(room) : startViewer(room)).catch((e) => setStatus('Ошибка: ' + e.message, 'err'));
 }
 $('camBtn').onclick = () => go('camera');
 $('viewBtn').onclick = () => go('viewer');
