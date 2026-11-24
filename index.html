@@ -115,7 +115,8 @@
   <button id="tapPlay" class="primary hidden">Нажмите, чтобы запустить видео</button>
   <div id="turnHint" class="hidden">
     Не удаётся соединиться с камерой ни напрямую, ни через ретранслятор.
-    Попытки продолжаются автоматически. Если так и не соединится, на камере откройте «Ретранслятор (TURN)» и нажмите «Проверить ретрансляторы».
+    Попытки продолжаются автоматически. Если на этом устройстве включён VPN — смените сервер VPN или выключите его:
+    часть VPN не пропускает UDP и нестандартные порты. Также на камере откройте «Ретранслятор (TURN)» и нажмите «Проверить ретрансляторы».
     <div class="row"><button id="hideHint">Понятно</button></div>
   </div>
   <div class="bar bottom">
@@ -136,7 +137,7 @@
 <script>
 'use strict';
 
-const VERSION = 'v9 · 2026-11-23';
+const VERSION = 'v10 · 2026-11-25';
 
 /* ================= НАСТРОЙКИ ================= */
 // Сигнализация: публичные MQTT-брокеры (WebSocket). Используются все сразу, хватит любого одного.
@@ -144,6 +145,13 @@ const BROKERS = [
   'wss://broker.hivemq.com:8884/mqtt',
   'wss://test.mosquitto.org:8081/mqtt',
   'wss://broker.emqx.io:8084/mqtt',
+];
+// Запасная сигнализация: Nostr-релеи. MQTT-брокеры слушают нестандартные порты
+// (8084/8884/8081), которые некоторые VPN не пропускают; релеи работают на 443.
+const NOSTR_RELAYS = [
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+  'wss://nostr.mom',
 ];
 // STUN, доступные без VPN (проверено diag.html).
 const ICE_SERVERS = [
@@ -394,6 +402,27 @@ async function testTurn() {
   await Promise.all(items.map(async (x, i) => { res[i] = await probeRelay(x.server); render(); }));
 }
 
+// Если ни один TURN-адрес не выдаёт relay-кандидата (ключ исчерпан или сеть режет
+// нужные порты), добавляем общий Open Relay. Проверяем TCP/443 — самый живучий адрес.
+// Возвращает исходный список, если TURN работает.
+async function withTurnFallback(list, tag) {
+  const turns = [];
+  for (const s of list) for (const u of s.urls) if (/^turns?:/i.test(u)) turns.push({ urls: [u], username: s.username, credential: s.credential });
+  if (!turns.length) return list;
+  const pick = turns.find((t) => /:443\?transport=tcp$/.test(t.urls[0])) || turns[0];
+  const res = await probeRelay(pick);
+  log(`[ice] ${tag}: проверка ${pick.urls[0]} — ${res}`);
+  if (res.startsWith('✓')) return list;
+  try {
+    const relay = await openRelayServer();
+    log(`[ice] ${tag}: TURN не работает, добавляю Open Relay`);
+    return mergeIce(list, [relay]);
+  } catch (e) {
+    log(`[ice] ${tag}: Open Relay недоступен: ${e.message}`);
+    return list;
+  }
+}
+
 // Trickle ICE с поколениями: каждое новое offer (в том числе ICE restart) получает номер gen.
 // Кандидаты помечаются номером и применяются только к своему поколению: сообщения от разных
 // брокеров приходят в любом порядке, и кандидат нового поколения может обогнать offer/answer.
@@ -573,6 +602,167 @@ class MqttConn {
   stop() { this.stopped = true; clearTimeout(this.retryTimer); this.drop('стоп'); }
 }
 
+/* ================= Nostr 443 / BIP-340 ================= */
+// Минимум secp256k1 и Schnorr-подписи BIP-340: без валидной подписи релеи не
+// принимают события. Ключ каждый раз случайный, к комнате не привязан —
+// конфиденциальность обеспечивает AES-GCM поверх, как и в MQTT.
+const SECP_P = 2n ** 256n - 2n ** 32n - 977n;
+const SECP_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141n;
+const SECP_G = [
+  0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798n,
+  0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8n,
+];
+const modP = (a) => { const r = a % SECP_P; return r < 0n ? r + SECP_P : r; };
+function powMod(b, e, m) { let r = 1n; while (e > 0n) { if (e & 1n) r = r * b % m; b = b * b % m; e >>= 1n; } return r; }
+// Точка в якобиановых координатах [X, Y, Z]; бесконечность — Z = 0.
+function jDouble([X, Y, Z]) {
+  if (Z === 0n || Y === 0n) return [1n, 1n, 0n];
+  const yy = modP(Y * Y), s = modP(4n * X * yy), m = modP(3n * X * X);
+  const x = modP(m * m - 2n * s);
+  return [x, modP(m * (s - x) - 8n * yy * yy), modP(2n * Y * Z)];
+}
+function jAddAffine([X, Y, Z], [x2, y2]) {
+  if (Z === 0n) return [x2, y2, 1n];
+  const zz = modP(Z * Z), h = modP(x2 * zz - X), r = modP(y2 * zz * Z - Y);
+  if (h === 0n) return r === 0n ? jDouble([X, Y, Z]) : [1n, 1n, 0n];
+  const hh = modP(h * h), x3 = modP(r * r - hh * h - 2n * X * hh);
+  return [x3, modP(r * (X * hh - x3) - Y * hh * h), modP(Z * h)];
+}
+function mulG(k) {
+  let p = [1n, 1n, 0n];
+  for (let i = 255n; i >= 0n; i--) {
+    p = jDouble(p);
+    if ((k >> i) & 1n) p = jAddAffine(p, SECP_G);
+  }
+  const zi = powMod(p[2], SECP_P - 2n, SECP_P);
+  return [modP(p[0] * zi * zi), modP(p[1] * zi * zi * zi)];
+}
+async function sha256(...parts) { return new Uint8Array(await crypto.subtle.digest('SHA-256', concat(...parts))); }
+async function taggedHash(tag, ...parts) {
+  const t = await sha256(enc.encode(tag));
+  return sha256(t, t, ...parts);
+}
+function bytes32(n) { const b = new Uint8Array(32); for (let i = 31; i >= 0; i--) { b[i] = Number(n & 255n); n >>= 8n; } return b; }
+function intOf(bytes) { let n = 0n; for (const b of bytes) n = (n << 8n) | BigInt(b); return n; }
+async function schnorrSign(priv, msg32) {
+  let d = priv;
+  const [px, py] = mulG(d);
+  if (py & 1n) d = SECP_N - d;
+  const auxHash = await taggedHash('BIP0340/aux', crypto.getRandomValues(new Uint8Array(32)));
+  const t = bytes32(d).map((b, i) => b ^ auxHash[i]);
+  const k0 = intOf(await taggedHash('BIP0340/nonce', t, bytes32(px), msg32)) % SECP_N;
+  if (k0 === 0n) throw new Error('нулевой nonce');
+  const [rx, ry] = mulG(k0);
+  const k = (ry & 1n) ? SECP_N - k0 : k0;
+  const e = intOf(await taggedHash('BIP0340/challenge', bytes32(rx), bytes32(px), msg32)) % SECP_N;
+  return concat(bytes32(rx), bytes32((k + e * d) % SECP_N));
+}
+function bytesToB64(b) { let s = ''; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.slice(i, i + 0x8000)); return btoa(s); }
+function b64ToBytes(s) { const bin = atob(s), b = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i); return b; }
+
+// Тот же интерфейс, что у MqttConn: ready, publish(payload), kick(), stop().
+// События эфемерные (kind 20000), тема комнаты — в теге t, payload — в content (base64).
+class NostrConn {
+  constructor(url, topic, onMessage, onState) {
+    this.url = url; this.topic = topic; this.onMessage = onMessage; this.onState = onState;
+    this.host = new URL(url).hostname;
+    this.ready = false; this.fails = 0; this.stopped = false;
+    this.ws = null; this.retryTimer = null;
+    this.sub = 'secam' + randId(8);
+    this.connect();
+  }
+  keys() {
+    if (!this.priv) {
+      this.priv = intOf(crypto.getRandomValues(new Uint8Array(32))) % SECP_N || 1n;
+      this.pub = hex(bytes32(mulG(this.priv)[0]));
+    }
+  }
+  connect() {
+    if (this.stopped || this.ws) return;
+    clearTimeout(this.retryTimer); this.retryTimer = null;
+    let ws;
+    try { ws = new WebSocket(this.url); } catch (e) { log(`[nostr] ${this.host}: ${e.message}`); return this.retry(); }
+    this.ws = ws;
+    this.lastRx = Date.now();
+    this.connTimer = setTimeout(() => { if (this.ws === ws && !this.ready) this.drop('таймаут подключения'); }, 10000);
+    ws.onopen = () => { this.keys(); this.subscribe(); };
+    ws.onmessage = (e) => { this.lastRx = Date.now(); this.handle(e.data); };
+    ws.onerror = () => {};
+    ws.onclose = (e) => this.closed(ws, 'code ' + e.code);
+  }
+  // Повторный REQ служит ping'ом: релеи отвечают EOSE.
+  subscribe() {
+    try { this.ws.send(JSON.stringify(['REQ', this.sub, { kinds: [20000], '#t': [this.topic], since: Math.floor(Date.now() / 1000) - 300 }])); } catch {}
+  }
+  handle(data) {
+    let m;
+    try { m = JSON.parse(data); } catch { return; }
+    if (m[0] === 'EOSE' && m[1] === this.sub) {
+      if (this.ready) return;
+      this.ready = true; this.fails = 0;
+      clearTimeout(this.connTimer);
+      this.pinger = setInterval(() => {
+        if (Date.now() - this.lastRx > 75000) { this.drop('релеи не отвечает'); return; }
+        this.subscribe();
+      }, 25000);
+      log(`[nostr] ${this.host}: подключён`);
+      this.onState();
+    } else if (m[0] === 'EVENT' && m[1] === this.sub) {
+      try { this.onMessage(b64ToBytes(m[2].content)); } catch {}
+    } else if (m[0] === 'OK' && m[2] === false) {
+      log(`[nostr] ${this.host}: событие отклонено: ${m[3]}`);
+    }
+  }
+  closed(ws, why) {
+    if (ws !== this.ws) return;
+    this.ws = null;
+    clearTimeout(this.connTimer);
+    clearInterval(this.pinger);
+    if (this.ready) log(`[nostr] ${this.host}: отключён (${why})`);
+    this.ready = false;
+    this.onState();
+    this.retry();
+  }
+  drop(why) {
+    const ws = this.ws;
+    if (!ws) return;
+    ws.onclose = ws.onmessage = ws.onopen = null;
+    try { ws.close(); } catch {}
+    this.closed(ws, why);
+  }
+  retry() {
+    if (this.stopped || this.retryTimer) return;
+    const delay = Math.min(15000, 1000 * 2 ** Math.min(this.fails++, 4));
+    this.retryTimer = setTimeout(() => { this.retryTimer = null; this.connect(); }, delay);
+  }
+  kick() {
+    if (this.stopped) return;
+    if (!this.ws) { this.fails = 0; this.connect(); return; }
+    if (!this.ready) return;
+    const ws = this.ws, t = Date.now();
+    this.subscribe();
+    setTimeout(() => { if (this.ws === ws && this.lastRx < t) this.drop('не отвечает после смены сети'); }, 5000);
+  }
+  async publish(payload) {
+    if (!this.ready) return;
+    try {
+      this.keys();
+      const ev = {
+        pubkey: this.pub,
+        created_at: Math.floor(Date.now() / 1000),
+        kind: 20000,
+        tags: [['t', this.topic]],
+        content: bytesToB64(payload),
+      };
+      const id = await sha256(enc.encode(JSON.stringify([0, ev.pubkey, ev.created_at, ev.kind, ev.tags, ev.content])));
+      ev.id = hex(id);
+      ev.sig = hex(await schnorrSign(this.priv, id));
+      this.ws.send(JSON.stringify(['EVENT', ev]));
+    } catch (e) { log(`[nostr] ${this.host}: publish: ${e.message}`); }
+  }
+  stop() { this.stopped = true; clearTimeout(this.retryTimer); this.drop('стоп'); }
+}
+
 /* ================= Зашифрованный сигнальный канал ================= */
 // Тема и ключ выводятся из кода комнаты. Брокеры публичные, поэтому всё содержимое
 // шифруется AES-GCM: без кода комнаты нельзя ни прочитать сообщения, ни подключиться к камере.
@@ -591,8 +781,15 @@ class Signal {
     this.key = key; this.onMsg = onMsg;
     this.seen = new Set();
     this.onReadyChange = () => {};
-    this.conns = BROKERS.map((u) => new MqttConn(u, topic, (p) => this.recv(p), () => this.onReadyChange()));
+    // Отладка: localStorage['secam-transport'] = 'mqtt' или 'nostr' оставляет один транспорт.
+    const mode = lsGet('secam-transport');
+    this.conns = [
+      ...(mode === 'nostr' ? [] : BROKERS.map((u) => new MqttConn(u, topic, (p) => this.recv(p), () => this.onReadyChange()))),
+      ...(mode === 'mqtt' ? [] : NOSTR_RELAYS.map((u) => new NostrConn(u, topic, (p) => this.recv(p), () => this.onReadyChange()))),
+    ];
+    log(`[sig] каналы: ${this.conns.map((c) => c.host).join(', ')}`);
   }
+  total() { return this.conns.length; }
   readyCount() { return this.conns.filter((c) => c.ready).length; }
   kick() { this.conns.forEach((c) => c.kick()); }
   async send(obj) {
@@ -602,7 +799,7 @@ class Signal {
     const payload = concat(iv, ct);
     const sent = this.readyCount();
     this.conns.forEach((c) => c.publish(payload));
-    if (obj.t !== 'ice' && (obj.t !== 'hello' || !this.helloLogged)) log(`[sig] → ${obj.t}${obj.gen ? ' #' + obj.gen : ''}${obj.to ? ' для ' + obj.to : ''} через ${sent} брокер(а), ${payload.length} байт`);
+    if (obj.t !== 'ice' && (obj.t !== 'hello' || !this.helloLogged)) log(`[sig] → ${obj.t}${obj.gen ? ' #' + obj.gen : ''}${obj.to ? ' для ' + obj.to : ''} через ${sent} канал(ов), ${payload.length} байт`);
     if (obj.t === 'hello') this.helloLogged = true;
   }
   async recv(payload) {
@@ -634,6 +831,22 @@ class Signal {
 }
 
 /* ================= CAMERA ================= */
+// Отладка без реальной камеры (desktop): localStorage['secam-fake-cam'] = '1'.
+function fakeCamStream() {
+  const c = document.createElement('canvas');
+  c.width = 640; c.height = 360;
+  const ctx = c.getContext('2d');
+  let f = 0;
+  setInterval(() => {
+    f++;
+    ctx.fillStyle = '#16202e'; ctx.fillRect(0, 0, 640, 360);
+    ctx.fillStyle = '#3d8bfd'; ctx.fillRect((f * 4) % 600, 150, 40, 60);
+    ctx.fillStyle = '#fff'; ctx.font = '24px monospace';
+    ctx.fillText('SECam тест ' + new Date().toLocaleTimeString(), 20, 40);
+  }, 66);
+  return c.captureStream(15);
+}
+
 async function startCamera(room) {
   showStage('camera');
   setStatus('Запрашиваю доступ к камере…', 'warn');
@@ -644,6 +857,7 @@ async function startCamera(room) {
   const viewers = new Map();
 
   async function getStream() {
+    if (lsGet('secam-fake-cam') === '1' && HTMLCanvasElement.prototype.captureStream) return fakeCamStream();
     return navigator.mediaDevices.getUserMedia({
       audio: false,
       video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24, max: 30 } },
@@ -707,8 +921,10 @@ async function startCamera(room) {
 
   setStatus('Получаю настройки ретранслятора…', 'warn');
   let iceList = await getIceServers();
+  const applyTurnFallback = (l) => withTurnFallback(l, 'cam').then((x) => { iceList = x; });
+  applyTurnFallback(iceList);
   // Учётные данные TURN временные: обновляем каждые 4 часа (камера работает сутками).
-  setInterval(async () => { iceList = await getIceServers(); }, 4 * 3600 * 1000);
+  setInterval(async () => { applyTurnFallback(await getIceServers()); }, 4 * 3600 * 1000);
 
   setStatus('Подключаюсь к сигнальным серверам…', 'warn');
   const signal = await Signal.create(room, onMsg);
@@ -718,8 +934,8 @@ async function startCamera(room) {
     const s = signal.readyCount();
     const live = Array.from(viewers.values()).filter((v) => v.connected).length;
     const lost = Array.from(viewers.values()).filter((v) => v.everConnected && !v.connected).length;
-    if (!s && !live) return setStatus(`Нет связи с сигнальными серверами (0/${BROKERS.length}), повторяю…`, 'err');
-    setStatus(`В эфире · зрителей: ${live}${lost ? ` (+${lost} восстанавливается)` : ''} · сигнал ${s}/${BROKERS.length}` + (camInfo ? ' · ' + camInfo : ''), s ? 'ok' : 'warn');
+    if (!s && !live) return setStatus(`Нет связи с сигнальными серверами (0/${signal.total()}), повторяю…`, 'err');
+    setStatus(`В эфире · зрителей: ${live}${lost ? ` (+${lost} восстанавливается)` : ''} · сигнал ${s}/${signal.total()}` + (camInfo ? ' · ' + camInfo : ''), s ? 'ok' : 'warn');
   }
   signal.onReadyChange = updateStatus;
 
@@ -926,7 +1142,8 @@ async function startViewer(room) {
   const tapPlay = $('tapPlay');
   tapPlay.onclick = () => { tapPlay.classList.add('hidden'); els.video.play().catch((e) => log('[view] play: ' + e.message)); };
 
-  const ownIce = await getIceServers();
+  let ownIce = await getIceServers();
+  withTurnFallback(ownIce, 'view').then((l) => { ownIce = l; });
   const signal = await Signal.create(room, onMsg);
   let wasReady = 0;
   signal.onReadyChange = () => {
@@ -940,9 +1157,9 @@ async function startViewer(room) {
   function sayHello(count = true) {
     if (pc) return;
     const s = signal.readyCount();
-    if (!s) { setStatus(`Нет связи с сигнальными серверами (0/${BROKERS.length}), повторяю…`, 'err'); return; }
+    if (!s) { setStatus(`Нет связи с сигнальными серверами (0/${signal.total()}), повторяю…`, 'err'); return; }
     if (count) hellos++;
-    setStatus(hellos > 3 ? `Камера не отвечает, жду… (сигнал ${s}/${BROKERS.length})` : `Ищу камеру… (сигнал ${s}/${BROKERS.length})`, 'warn');
+    setStatus(hellos > 3 ? `Камера не отвечает, жду… (сигнал ${s}/${signal.total()})` : `Ищу камеру… (сигнал ${s}/${signal.total()})`, 'warn');
     signal.send({ t: 'hello', sid });
   }
 
